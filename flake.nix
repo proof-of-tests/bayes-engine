@@ -9,9 +9,13 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    wrangler = {
+      url = "github:emrldnix/wrangler";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils, crane, rust-overlay }:
+  outputs = { self, nixpkgs, flake-utils, crane, rust-overlay, wrangler }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
@@ -101,6 +105,17 @@
         packages = {
           default = cargoBuild;
           bayes-engine = cargoBuild;
+        };
+
+        apps = {
+          # Deploy the app locally using wrangler
+          # Run this from a directory containing wrangler.toml
+          wrangler-dev = {
+            type = "app";
+            program = "${pkgs.writeShellScript "wrangler-dev" ''
+              exec ${wrangler.packages.${system}.default}/bin/wrangler dev
+            ''}";
+          };
         };
 
         # Add a formatter for convenience
