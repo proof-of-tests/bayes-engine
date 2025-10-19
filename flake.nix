@@ -4,12 +4,28 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    crane.url = "github:ipetkov/crane";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils, crane }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
+        craneLib = crane.mkLib pkgs;
+
+        # Common source filtering
+        src = craneLib.cleanCargoSource ./.;
+
+        # Common arguments for all Crane builds
+        commonArgs = {
+          inherit src;
+          strictDeps = true;
+        };
+
+        # Build the workspace
+        cargoBuild = craneLib.buildPackage (commonArgs // {
+          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+        });
       in
       {
         checks = {
@@ -49,41 +65,32 @@
             touch $out
           '';
 
-          # Build Rust website
-          rust-build = pkgs.runCommand "check-rust-build"
-            {
-              buildInputs = with pkgs; [ rustc cargo bash ];
-            } ''
-            ${pkgs.bash}/bin/bash ${./nix/check-rust-build.sh} ${./.}
-            touch $out
-          '';
+          # Build Rust website with Crane
+          rust-build = cargoBuild;
 
-          # Check Rust formatting
-          rust-fmt = pkgs.runCommand "check-rust-fmt"
-            {
-              buildInputs = with pkgs; [ rustc cargo rustfmt bash ];
-            } ''
-            ${pkgs.bash}/bin/bash ${./nix/check-rust-fmt.sh} ${./.}
-            touch $out
-          '';
+          # Check Rust formatting with Crane
+          rust-fmt = craneLib.cargoFmt {
+            inherit (commonArgs) src;
+          };
 
-          # Check Rust with Clippy
-          rust-clippy = pkgs.runCommand "check-rust-clippy"
-            {
-              buildInputs = with pkgs; [ rustc cargo clippy bash ];
-            } ''
-            ${pkgs.bash}/bin/bash ${./nix/check-rust-clippy.sh} ${./.}
-            touch $out
-          '';
+          # Check Rust with Clippy using Crane
+          rust-clippy = craneLib.cargoClippy (commonArgs // {
+            cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+            cargoClippyExtraArgs = "--all-targets -- --deny warnings";
+          });
 
-          # Run Rust tests
-          rust-test = pkgs.runCommand "check-rust-test"
-            {
-              buildInputs = with pkgs; [ rustc cargo bash ];
-            } ''
-            ${pkgs.bash}/bin/bash ${./nix/check-rust-test.sh} ${./.}
-            touch $out
-          '';
+          # Run Rust tests with Crane
+          rust-test = craneLib.cargoNextest (commonArgs // {
+            cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+            partitions = 1;
+            partitionType = "count";
+          });
+        };
+
+        # Packages
+        packages = {
+          default = cargoBuild;
+          bayes-engine = cargoBuild;
         };
 
         # Add a formatter for convenience
