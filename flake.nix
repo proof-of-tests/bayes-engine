@@ -93,7 +93,7 @@
           '';
 
           buildPhaseCargoCommand = ''
-            worker-build --release
+            worker-build --release --mode no-install
           '';
 
           installPhaseCommand = ''
