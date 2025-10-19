@@ -8,9 +8,9 @@ cd "$SOURCE_DIR"
 # Find all markdown files and check if they're formatted
 find . -name "*.md" -type f | while read -r file; do
   echo "Checking $file..."
-  mdformat --check "$file" || {
+  mdformat --check --number "$file" || {
     echo "Error: $file is not properly formatted"
-    echo "Run 'nix run nixpkgs#mdformat -- $file' to fix"
+    echo "Run 'nix run nixpkgs#mdformat -- --number $file' to fix"
     exit 1
   }
 done

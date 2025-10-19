@@ -96,8 +96,8 @@ Address review comments, then merge when approved.
 ### Test Types
 
 1. **Unit Tests**: Test individual functions/methods in isolation
-1. **Integration Tests**: Test how components work together
-1. **End-to-End Tests**: Test complete workflows
+2. **Integration Tests**: Test how components work together
+3. **End-to-End Tests**: Test complete workflows
 
 ### Testing Best Practices
 
