@@ -87,10 +87,34 @@
           buildPhase = ''
             # worker-build needs writable directories
             export HOME=$TMPDIR
-            mkdir -p $HOME/.cache
+            mkdir -p $HOME/.cache/worker-build
 
             # Unset any cargo target that crane might have set
             unset CARGO_BUILD_TARGET
+
+            # worker-build looks for esbuild in cache at:
+            # $HOME/.cache/worker-build/esbuild-{platform}-{version}
+            # Create a symlink to the Nix-provided esbuild
+            # Determine platform
+            if [ "$(uname -s)" = "Linux" ]; then
+              if [ "$(uname -m)" = "x86_64" ]; then
+                ESBUILD_PLATFORM="linux-x64"
+              elif [ "$(uname -m)" = "aarch64" ]; then
+                ESBUILD_PLATFORM="linux-arm64"
+              fi
+            elif [ "$(uname -s)" = "Darwin" ]; then
+              if [ "$(uname -m)" = "x86_64" ]; then
+                ESBUILD_PLATFORM="darwin-x64"
+              elif [ "$(uname -m)" = "arm64" ]; then
+                ESBUILD_PLATFORM="darwin-arm64"
+              fi
+            fi
+
+            # worker-build always expects version 0.25.10
+            ESBUILD_VERSION="0.25.10"
+
+            # Create symlink so worker-build finds it in cache
+            ln -sf $(which esbuild) $HOME/.cache/worker-build/esbuild-$ESBUILD_PLATFORM-$ESBUILD_VERSION
 
             cargo --version
             worker-build --release --mode no-install
