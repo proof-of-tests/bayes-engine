@@ -97,53 +97,7 @@
           '';
 
           buildPhase = ''
-            # worker-build needs writable directories
-            export HOME=$TMPDIR
-            mkdir -p $HOME/.cache/worker-build
-
-            # Unset any cargo target that crane might have set
-            unset CARGO_BUILD_TARGET
-
-            # Create esbuild symlink in cache so worker-build finds it
-            # Determine platform for the cache filename
-            if [ "$(uname -s)" = "Linux" ]; then
-              if [ "$(uname -m)" = "x86_64" ]; then
-                ESBUILD_PLATFORM="linux-x64"
-              elif [ "$(uname -m)" = "aarch64" ]; then
-                ESBUILD_PLATFORM="linux-arm64"
-              fi
-            elif [ "$(uname -s)" = "Darwin" ]; then
-              if [ "$(uname -m)" = "arm64" ]; then
-                ESBUILD_PLATFORM="darwin-arm64"
-              else
-                echo "Unsupported Darwin platform (only aarch64-darwin is supported)"
-                exit 1
-              fi
-            fi
-
-            # Symlink our esbuild 0.25.10 to the cache location
-            ln -sf $(command -v esbuild) $HOME/.cache/worker-build/esbuild-$ESBUILD_PLATFORM-0.25.10
-
-            # Build client WASM and prepare assets directory
-            echo "Building client WASM..."
-            mkdir -p assets/pkg
-            cd client
-            wasm-pack build --target web --out-dir ../assets/pkg --no-typescript
-            cd ..
-
-            # Copy static HTML and CSS to assets
-            cp public/index.html assets/index.html
-            cp public/style.css assets/style.css
-
-            # Build server worker
-            echo "Building server worker..."
-            cd server
-            cargo --version
-            worker-build --release --mode no-install
-            cd ..
-
-            # Move server build output to root
-            mv server/build .
+            ${pkgs.bash}/bin/bash ${./nix/build-webapp.sh}
           '';
 
           installPhaseCommand = ''
