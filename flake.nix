@@ -87,6 +87,9 @@
             # worker-build needs writable directories
             export HOME=$TMPDIR
             mkdir -p $HOME/.cache
+
+            # Ensure wasm-opt and wasm-bindgen are available without download
+            export PATH="${pkgs.binaryen}/bin:${pkgs.wasm-bindgen-cli}/bin:$PATH"
           '';
 
           buildPhaseCargoCommand = ''
