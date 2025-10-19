@@ -39,6 +39,15 @@
             ${pkgs.bash}/bin/bash ${./nix/check-nix-lint.sh} ${./.}
             touch $out
           '';
+
+          # Check shell scripts with shellcheck
+          shellcheck = pkgs.runCommand "check-shellcheck"
+            {
+              buildInputs = [ pkgs.shellcheck pkgs.bash ];
+            } ''
+            ${pkgs.bash}/bin/bash ${./nix/check-shellcheck.sh} ${./.}
+            touch $out
+          '';
         };
 
         # Add a formatter for convenience
