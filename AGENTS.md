@@ -22,6 +22,7 @@ git checkout -b <type>/<brief-description> origin/main
 ```
 
 Branch types:
+
 - `feat/` - New features
 - `fix/` - Bug fixes
 - `docs/` - Documentation changes
@@ -48,6 +49,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/) format:
 **NOTE**: Do not include "Co-Authored-By: Claude" or similar AI attribution in commit messages.
 
 Examples:
+
 ```bash
 git commit -m "feat: add Bayesian inference engine"
 git commit -m "fix(parser): handle edge case in probability parsing"
@@ -171,7 +173,7 @@ Document learnings, decisions, and insights here as the project evolves.
 - Established development workflow
 - Set up documentation for AI agents
 
----
+______________________________________________________________________
 
 ## Tips for AI Agents
 
