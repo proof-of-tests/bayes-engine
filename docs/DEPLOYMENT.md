@@ -74,7 +74,7 @@ This ensures PRs can verify deployment configuration before merging.
 
 You can also trigger deployments manually:
 
-- Go to Actions → Deploy to CloudFlare Workers → Run workflow
+- Go to Actions → CD → Run workflow
 
 ## Local Deployment
 
