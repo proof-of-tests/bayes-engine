@@ -63,9 +63,14 @@ wrangler whoami
 
 The deployment workflow (`.github/workflows/deploy.yml`) will:
 
-1. Trigger automatically on pushes to the `main` branch
+1. Trigger automatically on:
+   - Pushes to the `main` branch (full deployment)
+   - Pull requests to `main` (dry-run deployment for validation)
 2. Build the webapp using Nix (reproducible, no need for worker-build installation)
 3. Deploy to CloudFlare Workers using wrangler
+
+**Note:** Pull requests run with `--dry-run` flag, which validates the deployment without actually publishing changes.
+This ensures PRs can verify deployment configuration before merging.
 
 You can also trigger deployments manually:
 
