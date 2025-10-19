@@ -31,8 +31,10 @@ async fn fetch(req: Request, _env: Env, _ctx: worker::Context) -> Result<Respons
 <body>
     <div id="main"></div>
     <script type="module">
-        import init from './index.js';
-        init();
+        import init, { hydrate } from './index.js';
+        init().then(() => {
+            hydrate();
+        });
     </script>
 </body>
 </html>"#;
@@ -44,8 +46,9 @@ async fn fetch(req: Request, _env: Env, _ctx: worker::Context) -> Result<Respons
 }
 
 // WASM entry point for the Dioxus web app
-#[wasm_bindgen(start)]
-pub fn wasm_main() {
+// Note: Not using #[wasm_bindgen(start)] to avoid auto-initialization on server
+#[wasm_bindgen]
+pub fn hydrate() {
     dioxus_web::launch::launch(App, vec![], Default::default());
 }
 
