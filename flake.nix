@@ -59,10 +59,10 @@
         commonArgsWasm = {
           inherit src;
           strictDeps = true;
-          CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
           nativeBuildInputs = [
             pkgs.worker-build
             pkgs.wasm-bindgen-cli
+            pkgs.wasm-pack
             pkgs.binaryen
             pkgs.nodejs_22
           ];
@@ -83,16 +83,15 @@
             chmod -R +w $sourceRoot
           '';
 
-          preBuild = ''
+          buildPhase = ''
             # worker-build needs writable directories
             export HOME=$TMPDIR
             mkdir -p $HOME/.cache
 
-            # Ensure wasm-opt and wasm-bindgen are available without download
-            export PATH="${pkgs.binaryen}/bin:${pkgs.wasm-bindgen-cli}/bin:$PATH"
-          '';
+            # Unset any cargo target that crane might have set
+            unset CARGO_BUILD_TARGET
 
-          buildPhaseCargoCommand = ''
+            cargo --version
             worker-build --release --mode no-install
           '';
 
