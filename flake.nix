@@ -124,11 +124,16 @@
             # Symlink our esbuild 0.25.10 to the cache location
             ln -sf $(command -v esbuild) $HOME/.cache/worker-build/esbuild-$ESBUILD_PLATFORM-0.25.10
 
-            # Build client WASM
+            # Build client WASM and prepare assets directory
             echo "Building client WASM..."
+            mkdir -p assets/pkg
             cd client
-            wasm-pack build --target web --out-dir ../public/pkg --no-typescript
+            wasm-pack build --target web --out-dir ../assets/pkg --no-typescript
             cd ..
+
+            # Copy static HTML and CSS to assets
+            cp public/index.html assets/index.html
+            cp public/style.css assets/style.css
 
             # Build server worker
             echo "Building server worker..."
@@ -144,6 +149,7 @@
           installPhaseCommand = ''
             mkdir -p $out
             cp -r build/* $out/
+            cp -r assets $out/
           '';
         });
       in
