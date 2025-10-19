@@ -64,6 +64,7 @@
             pkgs.wasm-bindgen-cli
             pkgs.wasm-pack
             pkgs.binaryen
+            pkgs.esbuild
             pkgs.nodejs_22
           ];
         };
