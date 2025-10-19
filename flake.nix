@@ -4,9 +4,13 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    wrangler = {
+      url = "github:emrldnix/wrangler";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils, wrangler }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
@@ -48,6 +52,17 @@
             ${pkgs.bash}/bin/bash ${./nix/check-shellcheck.sh} ${./.}
             touch $out
           '';
+        };
+
+        apps = {
+          # Deploy the app locally using wrangler
+          # Run this from a directory containing wrangler.toml
+          wrangler-dev = {
+            type = "app";
+            program = "${pkgs.writeShellScript "wrangler-dev" ''
+              exec ${wrangler.packages.${system}.default}/bin/wrangler dev
+            ''}";
+          };
         };
 
         # Add a formatter for convenience
