@@ -30,8 +30,16 @@
         # Load Rust toolchain from rust-toolchain.toml
         rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
 
+        # Rust toolchain with wasm32 target for webapp builds
+        rustToolchainWasm = rustToolchain.override {
+          targets = [ "wasm32-unknown-unknown" ];
+        };
+
         # Create craneLib with custom toolchain
         craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
+
+        # Create craneLib for wasm builds
+        craneLibWasm = (crane.mkLib pkgs).overrideToolchain rustToolchainWasm;
 
         # Common source filtering
         src = craneLib.cleanCargoSource ./.;
@@ -45,6 +53,116 @@
         # Build the workspace
         cargoBuild = craneLib.buildPackage (commonArgs // {
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+        });
+
+        # Fetch esbuild 0.25.10 for different platforms (required by worker-build)
+        esbuild_0_25_10 = pkgs.stdenv.mkDerivation rec {
+          pname = "esbuild";
+          version = "0.25.10";
+
+          src =
+            if pkgs.stdenv.isLinux then
+              (if pkgs.stdenv.isAarch64 then
+                pkgs.fetchurl
+                  {
+                    url = "https://registry.npmjs.org/@esbuild/linux-arm64/-/linux-arm64-${version}.tgz";
+                    hash = "sha256-6q8Hh3OZvJ9nhJLf/R62VdeQKgm6XjbTq28xYysS9dU=";
+                  }
+              else
+                pkgs.fetchurl {
+                  url = "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-${version}.tgz";
+                  hash = "sha256-Jae5aLjlFyuqqPRPkbccHS1+dgBCxpHyKrWVJ9hw0UU=";
+                })
+            else if pkgs.stdenv.isDarwin then
+              (if pkgs.stdenv.isAarch64 then
+                pkgs.fetchurl
+                  {
+                    url = "https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-${version}.tgz";
+                    hash = "sha256-Pk16CWK7fvkP6RLlzaHqCkQWYfEqJd0J3/w7qr7Y8X8=";
+                  }
+              else
+                pkgs.fetchurl {
+                  url = "https://registry.npmjs.org/@esbuild/darwin-x64/-/darwin-x64-${version}.tgz";
+                  hash = "sha256-/vu7YWmvZT8YPm9s2GI7pCv8J0GsD0vYJF6dEj2NjOo=";
+                })
+            else throw "Unsupported platform";
+
+          dontUnpack = false;
+          unpackPhase = ''
+            tar xzf $src
+          '';
+
+          installPhase = ''
+            mkdir -p $out/bin
+            cp package/bin/esbuild $out/bin/
+            chmod +x $out/bin/esbuild
+          '';
+        };
+
+        # Common arguments for wasm builds
+        commonArgsWasm = {
+          inherit src;
+          strictDeps = true;
+          nativeBuildInputs = [
+            pkgs.worker-build
+            pkgs.wasm-bindgen-cli
+            pkgs.wasm-pack
+            pkgs.binaryen
+            esbuild_0_25_10
+            pkgs.nodejs_22
+          ];
+        };
+
+        # Build the webapp with worker-build
+        webapp = craneLibWasm.buildPackage (commonArgsWasm // {
+          cargoArtifacts = craneLibWasm.buildDepsOnly commonArgsWasm;
+
+          # We're not installing cargo binaries, we're copying build artifacts
+          doNotPostBuildInstallCargoBinaries = true;
+
+          # Can't run wasm tests natively
+          doCheck = false;
+
+          # Make source writable since worker-build creates a build directory
+          postUnpack = ''
+            chmod -R +w $sourceRoot
+          '';
+
+          buildPhase = ''
+            # worker-build needs writable directories
+            export HOME=$TMPDIR
+            mkdir -p $HOME/.cache/worker-build
+
+            # Unset any cargo target that crane might have set
+            unset CARGO_BUILD_TARGET
+
+            # Create esbuild symlink in cache so worker-build finds it
+            # Determine platform for the cache filename
+            if [ "$(uname -s)" = "Linux" ]; then
+              if [ "$(uname -m)" = "x86_64" ]; then
+                ESBUILD_PLATFORM="linux-x64"
+              elif [ "$(uname -m)" = "aarch64" ]; then
+                ESBUILD_PLATFORM="linux-arm64"
+              fi
+            elif [ "$(uname -s)" = "Darwin" ]; then
+              if [ "$(uname -m)" = "x86_64" ]; then
+                ESBUILD_PLATFORM="darwin-x64"
+              elif [ "$(uname -m)" = "arm64" ]; then
+                ESBUILD_PLATFORM="darwin-arm64"
+              fi
+            fi
+
+            # Symlink our esbuild 0.25.10 to the cache location
+            ln -sf $(command -v esbuild) $HOME/.cache/worker-build/esbuild-$ESBUILD_PLATFORM-0.25.10
+
+            cargo --version
+            worker-build --release --mode no-install
+          '';
+
+          installPhaseCommand = ''
+            mkdir -p $out
+            cp -r build/* $out/
+          '';
         });
       in
       {
@@ -115,6 +233,7 @@
         packages = {
           default = cargoBuild;
           bayes-engine = cargoBuild;
+          inherit webapp;
         };
 
         apps = {
