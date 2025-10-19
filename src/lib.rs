@@ -1,6 +1,8 @@
 use dioxus::prelude::*;
+use wasm_bindgen::prelude::*;
 use worker::*;
 
+// CloudFlare Worker entry point
 #[event(fetch)]
 async fn fetch(req: Request, _env: Env, _ctx: worker::Context) -> Result<Response> {
     // Get the path from the request
@@ -9,21 +11,15 @@ async fn fetch(req: Request, _env: Env, _ctx: worker::Context) -> Result<Respons
     // Route handling
     match path.as_str() {
         "/" => {
-            // Render the Dioxus app to HTML
-            let mut vdom = VirtualDom::new(App);
-            vdom.rebuild_in_place();
-            let html = dioxus_ssr::render(&vdom);
-
-            // Create HTML response with proper DOCTYPE and structure
-            let full_html = format!(
-                r#"<!DOCTYPE html>
+            // Serve HTML shell that loads the WASM bundle
+            let html = r#"<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Hello World - Dioxus on CloudFlare Workers</title>
     <style>
-        body {{
+        body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             display: flex;
             justify-content: center;
@@ -31,33 +27,33 @@ async fn fetch(req: Request, _env: Env, _ctx: worker::Context) -> Result<Respons
             min-height: 100vh;
             margin: 0;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        }}
-        .container {{
+        }
+        .container {
             background: white;
             padding: 3rem;
             border-radius: 1rem;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
             text-align: center;
-        }}
-        .counter-section {{
+        }
+        .counter-section {
             margin: 2rem 0;
             padding: 1.5rem;
             background: #f8f9fa;
             border-radius: 0.5rem;
-        }}
-        .counter-label {{
+        }
+        .counter-label {
             font-size: 1.2rem;
             font-weight: 600;
             color: #495057;
             margin: 0 0 1rem 0;
-        }}
-        .counter-display {{
+        }
+        .counter-display {
             font-size: 3rem;
             font-weight: bold;
             color: #667eea;
             margin: 1rem 0;
-        }}
-        .counter-button {{
+        }
+        .counter-button {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             border: none;
@@ -68,49 +64,55 @@ async fn fetch(req: Request, _env: Env, _ctx: worker::Context) -> Result<Respons
             cursor: pointer;
             transition: transform 0.2s, box-shadow 0.2s;
             box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-        }}
-        .counter-button:hover {{
+        }
+        .counter-button:hover {
             transform: translateY(-2px);
             box-shadow: 0 6px 16px rgba(102, 126, 234, 0.6);
-        }}
-        .counter-button:active {{
+        }
+        .counter-button:active {
             transform: translateY(0);
-        }}
+        }
     </style>
 </head>
 <body>
-    {html}
-    <script>
-        let count = 0;
-        const button = document.getElementById('counter-button');
-        const display = document.getElementById('counter-display');
-
-        button.addEventListener('click', () => {{
-            count++;
-            display.textContent = count;
-        }});
+    <div id="main"></div>
+    <script type="module">
+        import init from './index.js';
+        init();
     </script>
 </body>
-</html>"#
-            );
+</html>"#;
 
-            Response::from_html(full_html)
+            Response::from_html(html)
         }
         _ => Response::error("Not Found", 404),
     }
 }
 
+// WASM entry point for the Dioxus web app
+#[wasm_bindgen(start)]
+pub fn wasm_main() {
+    dioxus_web::launch::launch(App, vec![], Default::default());
+}
+
 #[component]
 fn App() -> Element {
+    // Use Rust signal for reactive state management
+    let mut count = use_signal(|| 0);
+
     rsx! {
         div { class: "container",
             h1 { "Hello World!" }
-            p { "This is a Dioxus app running on CloudFlare Workers" }
+            p { "This is a Dioxus WASM app running on CloudFlare Workers" }
 
             div { class: "counter-section",
                 p { class: "counter-label", "Click Counter:" }
-                p { id: "counter-display", class: "counter-display", "0" }
-                button { id: "counter-button", class: "counter-button", "Click Me!" }
+                p { class: "counter-display", "{count}" }
+                button {
+                    class: "counter-button",
+                    onclick: move |_| count += 1,
+                    "Click Me!"
+                }
             }
 
             p {
