@@ -71,7 +71,7 @@
               else
                 pkgs.fetchurl {
                   url = "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-${version}.tgz";
-                  hash = "sha256-JoH7XF/95KjQOTWHl0kWNdCnU65vJmYPZGb1cNWNqzU=";
+                  hash = "sha256-Jae5aLjlFyuqqPRPkbccHS1+dgBCxpHyKrWVJ9hw0UU=";
                 })
             else if pkgs.stdenv.isDarwin then
               (if pkgs.stdenv.isAarch64 then
