@@ -63,6 +63,9 @@ git push -u origin <branch-name>
 gh pr create --title "Title" --body "Description"
 ```
 
+**NOTE**: PR descriptions should be short and concise. Do not include a "Test Plan" section - PRs are automatically
+tested in CI and do not need manual testing instructions beyond that.
+
 **NOTE**: Do not include "Generated with Claude Code" or similar AI attribution in PR descriptions.
 
 ### 5. Review and Merge
