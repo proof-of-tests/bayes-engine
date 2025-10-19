@@ -1,0 +1,14 @@
+name = "bayes-engine"
+main = "build/worker/shim.mjs"
+compatibility_date = "2024-10-01"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+[build.upload]
+format = "modules"
+main = "./build/worker/shim.mjs"
+
+[[build.upload.rules]]
+globs = ["**/*.wasm"]
+type = "CompiledWasm"
