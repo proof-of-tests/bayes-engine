@@ -14,8 +14,11 @@ This document provides guidelines and best practices for AI agents (like Claude)
 
 ### 1. Create a Feature Branch
 
+**IMPORTANT**: Always create feature branches from the most recent `origin/main`:
+
 ```bash
-git checkout -b <type>/<brief-description>
+git fetch origin
+git checkout -b <type>/<brief-description> origin/main
 ```
 
 Branch types:
@@ -42,6 +45,8 @@ Use [Conventional Commits](https://www.conventionalcommits.org/) format:
 [optional footer]
 ```
 
+**NOTE**: Do not include "Co-Authored-By: Claude" or similar AI attribution in commit messages.
+
 Examples:
 ```bash
 git commit -m "feat: add Bayesian inference engine"
@@ -55,6 +60,8 @@ git commit -m "docs: update README with installation instructions"
 git push -u origin <branch-name>
 gh pr create --title "Title" --body "Description"
 ```
+
+**NOTE**: Do not include "Generated with Claude Code" or similar AI attribution in PR descriptions.
 
 ### 5. Review and Merge
 
@@ -143,20 +150,6 @@ gh pr checks
 ```
 
 ## Implementation Patterns
-
-### Error Handling
-
-Always handle errors explicitly:
-
-```
-# Good
-result = operation()
-if result.is_error():
-    handle_error(result)
-
-# Avoid
-result = operation()  # Ignoring potential errors
-```
 
 ### Testing Pattern
 
