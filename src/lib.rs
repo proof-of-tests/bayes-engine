@@ -10,6 +10,14 @@ async fn fetch(req: Request, _env: Env, _ctx: worker::Context) -> Result<Respons
 
     // Route handling
     match path.as_str() {
+        "/style.css" => {
+            // Serve the static CSS file
+            let css_content = include_str!("../static/style.css");
+            Response::from_html(css_content).map(|mut resp| {
+                resp.headers_mut().set("Content-Type", "text/css").unwrap();
+                resp
+            })
+        }
         "/" => {
             // Serve HTML shell that loads the WASM bundle
             let html = r#"<!DOCTYPE html>
@@ -18,61 +26,7 @@ async fn fetch(req: Request, _env: Env, _ctx: worker::Context) -> Result<Respons
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Hello World - Dioxus on CloudFlare Workers</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            margin: 0;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        }
-        .container {
-            background: white;
-            padding: 3rem;
-            border-radius: 1rem;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            text-align: center;
-        }
-        .counter-section {
-            margin: 2rem 0;
-            padding: 1.5rem;
-            background: #f8f9fa;
-            border-radius: 0.5rem;
-        }
-        .counter-label {
-            font-size: 1.2rem;
-            font-weight: 600;
-            color: #495057;
-            margin: 0 0 1rem 0;
-        }
-        .counter-display {
-            font-size: 3rem;
-            font-weight: bold;
-            color: #667eea;
-            margin: 1rem 0;
-        }
-        .counter-button {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            padding: 1rem 2rem;
-            font-size: 1.1rem;
-            font-weight: 600;
-            border-radius: 0.5rem;
-            cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-        }
-        .counter-button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 16px rgba(102, 126, 234, 0.6);
-        }
-        .counter-button:active {
-            transform: translateY(0);
-        }
-    </style>
+    <link rel="stylesheet" href="/style.css">
 </head>
 <body>
     <div id="main"></div>
