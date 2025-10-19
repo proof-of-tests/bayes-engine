@@ -1,0 +1,12 @@
+[package]
+name = "agent-1"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+worker = "0.4"
+dioxus = "0.6"
+dioxus-ssr = "0.6"
