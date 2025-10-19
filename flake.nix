@@ -24,7 +24,7 @@
   };
 
   outputs = { self, nixpkgs, flake-utils, crane, rust-overlay, wrangler, advisory-db, esbuild }:
-    flake-utils.lib.eachDefaultSystem (system:
+    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (system:
       let
         pkgs = import nixpkgs {
           inherit system;
@@ -108,10 +108,11 @@
                 ESBUILD_PLATFORM="linux-arm64"
               fi
             elif [ "$(uname -s)" = "Darwin" ]; then
-              if [ "$(uname -m)" = "x86_64" ]; then
-                ESBUILD_PLATFORM="darwin-x64"
-              elif [ "$(uname -m)" = "arm64" ]; then
+              if [ "$(uname -m)" = "arm64" ]; then
                 ESBUILD_PLATFORM="darwin-arm64"
+              else
+                echo "Unsupported Darwin platform (only aarch64-darwin is supported)"
+                exit 1
               fi
             fi
 

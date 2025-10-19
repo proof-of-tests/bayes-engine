@@ -7,7 +7,7 @@
   };
 
   outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
+    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (system:
       let
         pkgs = import nixpkgs { inherit system; };
 
@@ -35,11 +35,7 @@
                     url = "https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-${version}.tgz";
                     hash = "sha256-Pk16CWK7fvkP6RLlzaHqCkQWYfEqJd0J3/w7qr7Y8X8=";
                   }
-              else
-                pkgs.fetchurl {
-                  url = "https://registry.npmjs.org/@esbuild/darwin-x64/-/darwin-x64-${version}.tgz";
-                  hash = "sha256-/vu7YWmvZT8YPm9s2GI7pCv8J0GsD0vYJF6dEj2NjOo=";
-                })
+              else throw "Unsupported Darwin platform (only aarch64-darwin is supported)")
             else throw "Unsupported platform";
 
           dontUnpack = false;
