@@ -55,6 +55,50 @@
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
         });
 
+        # Fetch esbuild 0.25.10 for different platforms (required by worker-build)
+        esbuild_0_25_10 = pkgs.stdenv.mkDerivation rec {
+          pname = "esbuild";
+          version = "0.25.10";
+
+          src =
+            if pkgs.stdenv.isLinux then
+              (if pkgs.stdenv.isAarch64 then
+                pkgs.fetchurl
+                  {
+                    url = "https://registry.npmjs.org/@esbuild/linux-arm64/-/linux-arm64-${version}.tgz";
+                    hash = "sha256-6q8Hh3OZvJ9nhJLf/R62VdeQKgm6XjbTq28xYysS9dU=";
+                  }
+              else
+                pkgs.fetchurl {
+                  url = "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-${version}.tgz";
+                  hash = "sha256-JoH7XF/95KjQOTWHl0kWNdCnU65vJmYPZGb1cNWNqzU=";
+                })
+            else if pkgs.stdenv.isDarwin then
+              (if pkgs.stdenv.isAarch64 then
+                pkgs.fetchurl
+                  {
+                    url = "https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-${version}.tgz";
+                    hash = "sha256-Pk16CWK7fvkP6RLlzaHqCkQWYfEqJd0J3/w7qr7Y8X8=";
+                  }
+              else
+                pkgs.fetchurl {
+                  url = "https://registry.npmjs.org/@esbuild/darwin-x64/-/darwin-x64-${version}.tgz";
+                  hash = "sha256-/vu7YWmvZT8YPm9s2GI7pCv8J0GsD0vYJF6dEj2NjOo=";
+                })
+            else throw "Unsupported platform";
+
+          dontUnpack = false;
+          unpackPhase = ''
+            tar xzf $src
+          '';
+
+          installPhase = ''
+            mkdir -p $out/bin
+            cp package/bin/esbuild $out/bin/
+            chmod +x $out/bin/esbuild
+          '';
+        };
+
         # Common arguments for wasm builds
         commonArgsWasm = {
           inherit src;
@@ -64,7 +108,7 @@
             pkgs.wasm-bindgen-cli
             pkgs.wasm-pack
             pkgs.binaryen
-            pkgs.esbuild
+            esbuild_0_25_10
             pkgs.nodejs_22
           ];
         };
@@ -92,10 +136,8 @@
             # Unset any cargo target that crane might have set
             unset CARGO_BUILD_TARGET
 
-            # worker-build looks for esbuild in cache at:
-            # $HOME/.cache/worker-build/esbuild-{platform}-{version}
-            # Create a symlink to the Nix-provided esbuild
-            # Determine platform
+            # Create esbuild symlink in cache so worker-build finds it
+            # Determine platform for the cache filename
             if [ "$(uname -s)" = "Linux" ]; then
               if [ "$(uname -m)" = "x86_64" ]; then
                 ESBUILD_PLATFORM="linux-x64"
@@ -110,11 +152,8 @@
               fi
             fi
 
-            # worker-build always expects version 0.25.10
-            ESBUILD_VERSION="0.25.10"
-
-            # Create symlink so worker-build finds it in cache
-            ln -sf $(which esbuild) $HOME/.cache/worker-build/esbuild-$ESBUILD_PLATFORM-$ESBUILD_VERSION
+            # Symlink our esbuild 0.25.10 to the cache location
+            ln -sf $(command -v esbuild) $HOME/.cache/worker-build/esbuild-$ESBUILD_PLATFORM-0.25.10
 
             cargo --version
             worker-build --release --mode no-install
