@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 use worker::*;
 
 #[event(fetch)]
-async fn fetch(req: Request, _env: Env, _ctx: Context) -> Result<Response> {
+async fn fetch(req: Request, _env: Env, _ctx: worker::Context) -> Result<Response> {
     // Get the path from the request
     let path = req.path();
 
@@ -10,11 +10,9 @@ async fn fetch(req: Request, _env: Env, _ctx: Context) -> Result<Response> {
     match path.as_str() {
         "/" => {
             // Render the Dioxus app to HTML
-            let html = dioxus_ssr::render(|| {
-                rsx! {
-                    App {}
-                }
-            });
+            let mut vdom = VirtualDom::new(App);
+            vdom.rebuild_in_place();
+            let html = dioxus_ssr::render(&vdom);
 
             // Create HTML response with proper DOCTYPE and structure
             let full_html = format!(

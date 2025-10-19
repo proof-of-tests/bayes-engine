@@ -92,10 +92,8 @@
           });
 
           # Run Rust tests with Crane
-          rust-test = craneLib.cargoNextest (commonArgs // {
+          rust-test = craneLib.cargoTest (commonArgs // {
             cargoArtifacts = craneLib.buildDepsOnly commonArgs;
-            partitions = 1;
-            partitionType = "count";
           });
         };
 
