@@ -14,21 +14,25 @@ A Hello World web application built with [Dioxus](https://dioxuslabs.com/) and [
 Before you begin, ensure you have the following installed:
 
 1. **Rust** (latest stable version)
+
    ```bash
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
    ```
 
 2. **wasm32-unknown-unknown target**
+
    ```bash
    rustup target add wasm32-unknown-unknown
    ```
 
 3. **Wrangler CLI** (CloudFlare Workers CLI)
+
    ```bash
    npm install -g wrangler
    ```
 
 4. **worker-build** (will be installed automatically during build, but you can install it manually)
+
    ```bash
    cargo install worker-build
    ```
@@ -72,6 +76,7 @@ wrangler deploy
 ```
 
 The command will:
+
 1. Build your project using `worker-build`
 2. Compile the Rust code to WebAssembly
 3. Deploy to CloudFlare Workers
@@ -145,6 +150,7 @@ Modify the inline CSS in the `full_html` format string, or serve external CSS fi
 ### Build Errors
 
 If you encounter build errors:
+
 1. Ensure `wasm32-unknown-unknown` target is installed
 2. Clear the build cache: `cargo clean`
 3. Update dependencies: `cargo update`
@@ -152,6 +158,7 @@ If you encounter build errors:
 ### Deployment Issues
 
 If deployment fails:
+
 1. Verify you're logged in: `wrangler whoami`
 2. Check your CloudFlare account has Workers enabled
 3. Review `wrangler.toml` configuration
