@@ -8,6 +8,14 @@ async fn fetch(req: Request, _env: Env, _ctx: worker::Context) -> Result<Respons
 
     // Route handling
     match path.as_str() {
+        "/style.css" => {
+            // Serve the static CSS file
+            let css_content = include_str!("../static/style.css");
+            Response::from_html(css_content).map(|mut resp| {
+                resp.headers_mut().set("Content-Type", "text/css").unwrap();
+                resp
+            })
+        }
         "/" => {
             // Render the Dioxus app to HTML
             let mut vdom = VirtualDom::new(App);
@@ -22,24 +30,7 @@ async fn fetch(req: Request, _env: Env, _ctx: worker::Context) -> Result<Respons
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Hello World - Dioxus on CloudFlare Workers</title>
-    <style>
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            margin: 0;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        }}
-        .container {{
-            background: white;
-            padding: 3rem;
-            border-radius: 1rem;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            text-align: center;
-        }}
-    </style>
+    <link rel="stylesheet" href="/style.css">
 </head>
 <body>
     {html}
