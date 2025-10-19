@@ -13,9 +13,13 @@
       url = "github:emrldnix/wrangler";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    advisory-db = {
+      url = "github:rustsec/advisory-db";
+      flake = false;
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils, crane, rust-overlay, wrangler }:
+  outputs = { self, nixpkgs, flake-utils, crane, rust-overlay, wrangler, advisory-db }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
@@ -99,6 +103,12 @@
           rust-test = craneLib.cargoTest (commonArgs // {
             cargoArtifacts = craneLib.buildDepsOnly commonArgs;
           });
+
+          # Run cargo audit with Crane
+          rust-audit = craneLib.cargoAudit {
+            inherit (commonArgs) src;
+            inherit advisory-db;
+          };
         };
 
         # Packages
