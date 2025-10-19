@@ -17,9 +17,13 @@
       url = "github:rustsec/advisory-db";
       flake = false;
     };
+    esbuild = {
+      url = "path:./nix/esbuild";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils, crane, rust-overlay, wrangler, advisory-db }:
+  outputs = { self, nixpkgs, flake-utils, crane, rust-overlay, wrangler, advisory-db, esbuild }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
@@ -55,49 +59,8 @@
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
         });
 
-        # Fetch esbuild 0.25.10 for different platforms (required by worker-build)
-        esbuild_0_25_10 = pkgs.stdenv.mkDerivation rec {
-          pname = "esbuild";
-          version = "0.25.10";
-
-          src =
-            if pkgs.stdenv.isLinux then
-              (if pkgs.stdenv.isAarch64 then
-                pkgs.fetchurl
-                  {
-                    url = "https://registry.npmjs.org/@esbuild/linux-arm64/-/linux-arm64-${version}.tgz";
-                    hash = "sha256-6q8Hh3OZvJ9nhJLf/R62VdeQKgm6XjbTq28xYysS9dU=";
-                  }
-              else
-                pkgs.fetchurl {
-                  url = "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-${version}.tgz";
-                  hash = "sha256-Jae5aLjlFyuqqPRPkbccHS1+dgBCxpHyKrWVJ9hw0UU=";
-                })
-            else if pkgs.stdenv.isDarwin then
-              (if pkgs.stdenv.isAarch64 then
-                pkgs.fetchurl
-                  {
-                    url = "https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-${version}.tgz";
-                    hash = "sha256-Pk16CWK7fvkP6RLlzaHqCkQWYfEqJd0J3/w7qr7Y8X8=";
-                  }
-              else
-                pkgs.fetchurl {
-                  url = "https://registry.npmjs.org/@esbuild/darwin-x64/-/darwin-x64-${version}.tgz";
-                  hash = "sha256-/vu7YWmvZT8YPm9s2GI7pCv8J0GsD0vYJF6dEj2NjOo=";
-                })
-            else throw "Unsupported platform";
-
-          dontUnpack = false;
-          unpackPhase = ''
-            tar xzf $src
-          '';
-
-          installPhase = ''
-            mkdir -p $out/bin
-            cp package/bin/esbuild $out/bin/
-            chmod +x $out/bin/esbuild
-          '';
-        };
+        # Get esbuild 0.25.10 from the esbuild flake
+        esbuild_0_25_10 = esbuild.packages.${system}.default;
 
         # Common arguments for wasm builds
         commonArgsWasm = {
