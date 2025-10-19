@@ -39,10 +39,57 @@ async fn fetch(req: Request, _env: Env, _ctx: worker::Context) -> Result<Respons
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
             text-align: center;
         }}
+        .counter-section {{
+            margin: 2rem 0;
+            padding: 1.5rem;
+            background: #f8f9fa;
+            border-radius: 0.5rem;
+        }}
+        .counter-label {{
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #495057;
+            margin: 0 0 1rem 0;
+        }}
+        .counter-display {{
+            font-size: 3rem;
+            font-weight: bold;
+            color: #667eea;
+            margin: 1rem 0;
+        }}
+        .counter-button {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 1rem 2rem;
+            font-size: 1.1rem;
+            font-weight: 600;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }}
+        .counter-button:hover {{
+            transform: translateY(-2px);
+            box-shadow: 0 6px 16px rgba(102, 126, 234, 0.6);
+        }}
+        .counter-button:active {{
+            transform: translateY(0);
+        }}
     </style>
 </head>
 <body>
     {html}
+    <script>
+        let count = 0;
+        const button = document.getElementById('counter-button');
+        const display = document.getElementById('counter-display');
+
+        button.addEventListener('click', () => {{
+            count++;
+            display.textContent = count;
+        }});
+    </script>
 </body>
 </html>"#
             );
@@ -59,6 +106,13 @@ fn App() -> Element {
         div { class: "container",
             h1 { "Hello World!" }
             p { "This is a Dioxus app running on CloudFlare Workers" }
+
+            div { class: "counter-section",
+                p { class: "counter-label", "Click Counter:" }
+                p { id: "counter-display", class: "counter-display", "0" }
+                button { id: "counter-button", class: "counter-button", "Click Me!" }
+            }
+
             p {
                 "Built with "
                 a { href: "https://dioxuslabs.com/", target: "_blank", "Dioxus" }
