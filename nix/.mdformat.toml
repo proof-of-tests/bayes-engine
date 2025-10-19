@@ -1,0 +1,13 @@
+# mdformat configuration reference
+# This file documents the mdformat settings used for this project.
+# The check script passes these settings directly via command line flags.
+#
+# To format markdown files manually, use:
+#   nix run nixpkgs#mdformat -- --wrap 120 --number path/to/file.md
+
+# Wrap text at 120 characters for better readability on modern displays
+wrap = 120
+
+# Use consecutive numbering for ordered lists (1., 2., 3.)
+# This improves readability in raw markdown
+number = true

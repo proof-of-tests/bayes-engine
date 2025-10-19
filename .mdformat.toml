@@ -1,7 +1,0 @@
-# mdformat configuration
-# Wrap text at 120 characters for better readability on modern displays
-wrap = 120
-
-# Use consecutive numbering for ordered lists (1., 2., 3.)
-# This improves readability in raw markdown
-number = true
