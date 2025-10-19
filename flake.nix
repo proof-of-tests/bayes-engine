@@ -124,8 +124,21 @@
             # Symlink our esbuild 0.25.10 to the cache location
             ln -sf $(command -v esbuild) $HOME/.cache/worker-build/esbuild-$ESBUILD_PLATFORM-0.25.10
 
+            # Build client WASM
+            echo "Building client WASM..."
+            cd client
+            wasm-pack build --target web --out-dir ../public/pkg --no-typescript
+            cd ..
+
+            # Build server worker
+            echo "Building server worker..."
+            cd server
             cargo --version
             worker-build --release --mode no-install
+            cd ..
+
+            # Move server build output to root
+            mv server/build .
           '';
 
           installPhaseCommand = ''

@@ -1,6 +1,6 @@
 name = "bayes-engine"
-main = "build/worker/shim.mjs"
+main = "build/server/shim.mjs"
 compatibility_date = "2024-10-01"
 
 [build]
-command = "nix build .#webapp --out-link build-result && rm -rf build && cp -r build-result build"
+command = "./build.sh"
