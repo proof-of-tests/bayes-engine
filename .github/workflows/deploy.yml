@@ -32,7 +32,7 @@ jobs:
         id: check-deployment
         run: |
           # Extract local content hash
-          LOCAL_HASH=$(cat result/content-hash.txt)
+          LOCAL_HASH=$(cat result/assets/content-hash.txt)
           echo "Local content hash: $LOCAL_HASH"
 
           # Try to fetch production content hash
