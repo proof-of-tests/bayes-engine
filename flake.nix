@@ -21,20 +21,15 @@
       url = "path:./nix/esbuild";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    nixpkgs-firefox-darwin = {
-      url = "github:bandithedoge/nixpkgs-firefox-darwin";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
-  outputs = { self, nixpkgs, flake-utils, crane, rust-overlay, wrangler, advisory-db, esbuild, nixpkgs-firefox-darwin }:
+  outputs = { self, nixpkgs, flake-utils, crane, rust-overlay, wrangler, advisory-db, esbuild }:
     flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (system:
       let
         pkgs = import nixpkgs {
           inherit system;
           overlays = [
             rust-overlay.overlays.default
-            nixpkgs-firefox-darwin.overlay
           ];
         };
 
@@ -195,9 +190,19 @@
             exit 1
           fi
 
-          # Start geckodriver with explicit Firefox binary path
+          # Find Firefox binary
           ${if pkgs.stdenv.isDarwin then ''
-            FIREFOX_BIN="${pkgs.firefox-bin}/Applications/Firefox.app/Contents/MacOS/firefox"
+            # On macOS, look for Firefox in common locations
+            if [ -f "/Applications/Firefox.app/Contents/MacOS/firefox" ]; then
+              FIREFOX_BIN="/Applications/Firefox.app/Contents/MacOS/firefox"
+            elif [ -f "$HOME/Applications/Firefox.app/Contents/MacOS/firefox" ]; then
+              FIREFOX_BIN="$HOME/Applications/Firefox.app/Contents/MacOS/firefox"
+            else
+              echo "ERROR: Firefox not found. Please install Firefox from https://www.mozilla.org/firefox/" >&2
+              echo "Expected location: /Applications/Firefox.app" >&2
+              exit 1
+            fi
+            echo "Using Firefox at: $FIREFOX_BIN"
           '' else ''
             FIREFOX_BIN="${pkgs.firefox}/bin/firefox"
           ''}
@@ -249,8 +254,10 @@
             pkgs.runCommand "e2e-tests"
               { }
               ''
-                echo "E2E tests cannot run in nix sandbox on macOS due to Firefox limitations"
-                echo "To run e2e tests locally, use: nix run .#run-e2e-tests"
+                echo "E2E tests cannot run in nix sandbox on macOS"
+                echo "To run e2e tests locally:"
+                echo "  1. Install Firefox from https://www.mozilla.org/firefox/"
+                echo "  2. Run: nix run .#run-e2e-tests"
                 echo ""
                 echo "Verifying test binary exists: ${cargoBuild}/bin/e2e_tests"
                 test -f ${cargoBuild}/bin/e2e_tests || exit 1

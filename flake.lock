@@ -121,26 +121,6 @@
         "type": "github"
       }
     },
-    "nixpkgs-firefox-darwin": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1760922408,
-        "narHash": "sha256-3NBqJiaULlClOHAM1O8n1C0C7yxEiiqwLFSk7ybxX8w=",
-        "owner": "bandithedoge",
-        "repo": "nixpkgs-firefox-darwin",
-        "rev": "9805e05fdcff261b3ca37f61445e07f2b3d78aca",
-        "type": "github"
-      },
-      "original": {
-        "owner": "bandithedoge",
-        "repo": "nixpkgs-firefox-darwin",
-        "type": "github"
-      }
-    },
     "root": {
       "inputs": {
         "advisory-db": "advisory-db",
@@ -148,7 +128,6 @@
         "esbuild": "esbuild",
         "flake-utils": "flake-utils_2",
         "nixpkgs": "nixpkgs",
-        "nixpkgs-firefox-darwin": "nixpkgs-firefox-darwin",
         "rust-overlay": "rust-overlay",
         "wrangler": "wrangler"
       }
