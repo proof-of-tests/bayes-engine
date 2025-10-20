@@ -12,3 +12,10 @@ name = "bayes-engine"
 [workspace.dependencies]
 dioxus = "0.6"
 wasm-bindgen = "0.2"
+
+[profile.release]
+opt-level = "z"     # Optimize for size
+lto = "fat"         # Enable full Link-Time Optimization for maximum size reduction
+codegen-units = 1   # Better optimization at the cost of compile time
+strip = true        # Strip symbols from binary
+panic = "abort"     # Reduce binary size by removing panic unwinding code
