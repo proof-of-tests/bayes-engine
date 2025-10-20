@@ -191,6 +191,15 @@
               exec ${wrangler.packages.${system}.default}/bin/wrangler dev
             ''}";
           };
+
+          # Report sizes of WASM and static assets
+          report-sizes = {
+            type = "app";
+            program = "${pkgs.writeShellScript "report-sizes" ''
+              export PATH="${pkgs.lib.makeBinPath [ pkgs.coreutils pkgs.findutils ]}:$PATH"
+              exec ${pkgs.bash}/bin/bash ${./nix/report-sizes.sh} ${webapp}
+            ''}";
+          };
         };
 
         # Add a formatter for convenience
