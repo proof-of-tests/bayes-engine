@@ -45,12 +45,13 @@
         # Create craneLib for wasm builds
         craneLibWasm = (crane.mkLib pkgs).overrideToolchain rustToolchainWasm;
 
-        # Common source filtering - include static directory for CSS and other assets
+        # Common source filtering - include static and public directories for CSS and other assets
         src = pkgs.lib.cleanSourceWith {
           src = ./.;
           filter = path: type:
             (craneLib.filterCargoSources path type) ||
-            (builtins.match ".*/static/.*" path != null);
+            (builtins.match ".*/static/.*" path != null) ||
+            (builtins.match ".*/public/.*" path != null);
         };
 
         # Common arguments for all Crane builds
