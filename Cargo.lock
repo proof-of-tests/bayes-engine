@@ -111,6 +111,7 @@ dependencies = [
  "dioxus-web",
  "gloo-net",
  "gloo-timers",
+ "rand",
  "serde",
  "serde_json",
  "wasm-bindgen",

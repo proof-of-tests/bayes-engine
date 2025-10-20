@@ -1,19 +1,7 @@
 use crate::hyperloglog::HyperLogLog;
 use dioxus::prelude::*;
-use wasm_bindgen::prelude::*;
-
-#[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(js_namespace = Math)]
-    fn random() -> f64;
-}
-
-fn generate_random_hash() -> u64 {
-    // Generate a pseudo-random 64-bit hash using JavaScript's Math.random()
-    let high = (random() * (u32::MAX as f64)) as u64;
-    let low = (random() * (u32::MAX as f64)) as u64;
-    (high << 32) | low
-}
+use rand::rngs::SmallRng;
+use rand::{RngCore, SeedableRng};
 
 #[component]
 pub fn HyperLogLogDemo() -> Element {
@@ -21,6 +9,8 @@ pub fn HyperLogLogDemo() -> Element {
     let mut hll = use_signal(|| HyperLogLog::new(8));
     let mut real_count = use_signal(|| 0u64);
     let mut is_running = use_signal(|| false);
+    // Use a fixed seed for reproducible results
+    let mut rng = use_signal(|| SmallRng::seed_from_u64(42));
 
     // Use resource to handle periodic hash generation
     let _ticker = use_resource(move || async move {
@@ -28,12 +18,16 @@ pub fn HyperLogLogDemo() -> Element {
             gloo_timers::future::TimeoutFuture::new(50).await;
 
             if is_running() {
-                // Add a random hash
-                let hash = generate_random_hash();
-                let seed = real_count();
+                // Generate a random number of hashes to add (1 to 1000)
+                let num_hashes = (rng.write().next_u32() % 1000) + 1;
 
-                hll.write().add(seed, hash);
-                real_count += 1;
+                for _ in 0..num_hashes {
+                    let hash = rng.write().next_u64();
+                    let seed = real_count();
+
+                    hll.write().add(seed, hash);
+                    real_count += 1;
+                }
             }
         }
     });
@@ -100,6 +94,8 @@ pub fn HyperLogLogDemo() -> Element {
                         hll.set(HyperLogLog::new(bits()));
                         real_count.set(0);
                         is_running.set(false);
+                        // Reset RNG to initial seed for reproducibility
+                        rng.set(SmallRng::seed_from_u64(42));
                     },
                     "Reset"
                 }
@@ -129,7 +125,8 @@ pub fn HyperLogLogDemo() -> Element {
                 p {
                     "The HyperLogLog algorithm provides excellent accuracy with minimal memory usage. "
                     "With {bits} bits, we use {1 << bits()} registers to estimate cardinality. "
-                    "Higher bit values provide more accurate estimates but use more memory."
+                    "Higher bit values provide more accurate estimates but use more memory. "
+                    "Each tick adds between 1 and 1,000 random hashes using a seeded PRNG."
                 }
             }
         }
