@@ -38,20 +38,11 @@ jobs:
       - name: Deploy to CloudFlare Workers (PR Preview)
         if: github.event_name == 'pull_request'
         id: deploy-preview
-        run: |
-          set +e
-          npx wrangler deploy --name bayes-engine-pr-${{ github.event.pull_request.number }} > deploy-output.txt 2>&1
-          EXIT_CODE=$?
-          cat deploy-output.txt
-          if [ $EXIT_CODE -ne 0 ]; then
-            echo "::error::Wrangler deploy failed with exit code $EXIT_CODE"
-            exit $EXIT_CODE
-          fi
-          PREVIEW_URL=$(grep -oP 'https://[^\s]+\.workers\.dev' deploy-output.txt | head -1)
-          echo "url=$PREVIEW_URL" >> $GITHUB_OUTPUT
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --name bayes-engine-pr-${{ github.event.pull_request.number }}
 
       - name: Comment PR with preview URL
         if: github.event_name == 'pull_request'
@@ -59,7 +50,7 @@ jobs:
         with:
           script: |
             const prNumber = context.issue.number;
-            const previewUrl = '${{ steps.deploy-preview.outputs.url }}';
+            const previewUrl = '${{ steps.deploy-preview.outputs.deployment-url }}';
             const body = `### 🚀 PR Preview Deployed\n\nYour preview deployment is ready!\n\n**Preview URL:** ${previewUrl}\n\nThis preview will be automatically deleted when the PR is closed or merged.`;
 
             // Check if we already commented
