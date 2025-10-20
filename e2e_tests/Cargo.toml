@@ -1,0 +1,9 @@
+[package]
+name = "e2e_tests"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+thirtyfour = "0.35"
+tokio = { version = "1.26", features = ["full"] }
+anyhow = "1.0"
