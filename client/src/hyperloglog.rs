@@ -44,8 +44,12 @@ impl HyperLogLog {
                 if hash == u64::MAX {
                     0.0
                 } else {
-                    let leading_zeros = hash.leading_zeros();
-                    2_f64.powi(-(leading_zeros as i32))
+                    // Remove the bits used for register selection
+                    let remaining = hash >> self.bits;
+                    // Count leading zeros in the remaining bits and add 1 for rho (1-indexed position)
+                    // We subtract self.bits because remaining is still in a 64-bit value with extra leading zeros
+                    let rho = remaining.leading_zeros() - self.bits as u32 + 1;
+                    2_f64.powi(-(rho as i32))
                 }
             })
             .sum();
