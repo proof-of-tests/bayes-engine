@@ -39,8 +39,14 @@ jobs:
         if: github.event_name == 'pull_request'
         id: deploy-preview
         run: |
+          set +e
           npx wrangler deploy --name bayes-engine-pr-${{ github.event.pull_request.number }} > deploy-output.txt 2>&1
+          EXIT_CODE=$?
           cat deploy-output.txt
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "::error::Wrangler deploy failed with exit code $EXIT_CODE"
+            exit $EXIT_CODE
+          fi
           PREVIEW_URL=$(grep -oP 'https://[^\s]+\.workers\.dev' deploy-output.txt | head -1)
           echo "url=$PREVIEW_URL" >> $GITHUB_OUTPUT
         env:

@@ -45,12 +45,13 @@
         # Create craneLib for wasm builds
         craneLibWasm = (crane.mkLib pkgs).overrideToolchain rustToolchainWasm;
 
-        # Common source filtering - include static directory for CSS and other assets
+        # Common source filtering - include static and public directories for CSS and other assets
         src = pkgs.lib.cleanSourceWith {
           src = ./.;
           filter = path: type:
             (craneLib.filterCargoSources path type) ||
-            (builtins.match ".*/static/.*" path != null);
+            (builtins.match ".*/static/.*" path != null) ||
+            (builtins.match ".*/public/.*" path != null);
         };
 
         # Common arguments for all Crane builds
@@ -97,40 +98,13 @@
           '';
 
           buildPhase = ''
-            # worker-build needs writable directories
-            export HOME=$TMPDIR
-            mkdir -p $HOME/.cache/worker-build
-
-            # Unset any cargo target that crane might have set
-            unset CARGO_BUILD_TARGET
-
-            # Create esbuild symlink in cache so worker-build finds it
-            # Determine platform for the cache filename
-            if [ "$(uname -s)" = "Linux" ]; then
-              if [ "$(uname -m)" = "x86_64" ]; then
-                ESBUILD_PLATFORM="linux-x64"
-              elif [ "$(uname -m)" = "aarch64" ]; then
-                ESBUILD_PLATFORM="linux-arm64"
-              fi
-            elif [ "$(uname -s)" = "Darwin" ]; then
-              if [ "$(uname -m)" = "arm64" ]; then
-                ESBUILD_PLATFORM="darwin-arm64"
-              else
-                echo "Unsupported Darwin platform (only aarch64-darwin is supported)"
-                exit 1
-              fi
-            fi
-
-            # Symlink our esbuild 0.25.10 to the cache location
-            ln -sf $(command -v esbuild) $HOME/.cache/worker-build/esbuild-$ESBUILD_PLATFORM-0.25.10
-
-            cargo --version
-            worker-build --release --mode no-install
+            ${pkgs.bash}/bin/bash ${./nix/build-webapp.sh}
           '';
 
           installPhaseCommand = ''
             mkdir -p $out
             cp -r build/* $out/
+            cp -r assets $out/
           '';
         });
       in
