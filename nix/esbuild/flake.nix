@@ -33,7 +33,7 @@
                 pkgs.fetchurl
                   {
                     url = "https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-${version}.tgz";
-                    hash = "sha256-Pk16CWK7fvkP6RLlzaHqCkQWYfEqJd0J3/w7qr7Y8X8=";
+                    hash = "sha256-3TOeNykqcRsuulRvsd823Z+EaoSaw+39OsUnG1Ai8yM=";
                   }
               else throw "Unsupported Darwin platform (only aarch64-darwin is supported)")
             else throw "Unsupported platform";
