@@ -15,8 +15,7 @@ if [ ! -d "$WEBAPP_DIR" ]; then
   exit 1
 fi
 
-echo "=== WASM and Asset Size Report ==="
-echo ""
+echo "Build Size Report"
 
 # Function to format bytes in a human-readable way
 format_bytes() {
@@ -33,36 +32,21 @@ report_file() {
     size=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null)
     local formatted
     formatted=$(format_bytes "$size")
-    printf "%-30s %10s (%s bytes)\n" "$label:" "$formatted" "$size"
+    printf "  %-24s %8s\n" "$label:" "$formatted"
   else
-    printf "%-30s %10s\n" "$label:" "NOT FOUND"
+    printf "  %-24s %8s\n" "$label:" "NOT FOUND"
   fi
 }
 
-# Report Server WASM
-echo "## Server WASM"
-report_file "$WEBAPP_DIR/index_bg.wasm" "Server Worker WASM"
-echo ""
-
-# Report Client WASM
-echo "## Client WASM"
+# Report WASM files
+report_file "$WEBAPP_DIR/index_bg.wasm" "Server WASM"
 report_file "$WEBAPP_DIR/assets/pkg/client_bg.wasm" "Client WASM"
-echo ""
-
-# Report Static Assets (excluding WASM)
-echo "## Static Assets (excluding WASM)"
-report_file "$WEBAPP_DIR/assets/index.html" "HTML"
-report_file "$WEBAPP_DIR/assets/style.css" "CSS"
-echo ""
 
 # Report JavaScript files
-echo "## JavaScript Assets"
-report_file "$WEBAPP_DIR/index.js" "Server Worker JS"
+report_file "$WEBAPP_DIR/index.js" "Server JS"
 report_file "$WEBAPP_DIR/assets/pkg/client.js" "Client JS"
-echo ""
 
 # Calculate total JS snippets size
-echo "## JavaScript Snippets"
 if [ -d "$WEBAPP_DIR/assets/pkg/snippets" ]; then
   total_snippets_size=0
   snippet_count=0
@@ -74,14 +58,14 @@ if [ -d "$WEBAPP_DIR/assets/pkg/snippets" ]; then
   done < <(find "$WEBAPP_DIR/assets/pkg/snippets" -type f -name "*.js" -print0)
 
   formatted=$(format_bytes "$total_snippets_size")
-  printf "%-30s %10s (%s bytes, %d files)\n" "Total Snippets:" "$formatted" "$total_snippets_size" "$snippet_count"
-else
-  echo "No snippets directory found"
+  printf "  %-24s %8s (%d files)\n" "JS Snippets:" "$formatted" "$snippet_count"
 fi
-echo ""
+
+# Report Static Assets
+report_file "$WEBAPP_DIR/assets/index.html" "HTML"
+report_file "$WEBAPP_DIR/assets/style.css" "CSS"
 
 # Calculate totals
-echo "## Totals"
 total_wasm=0
 total_static=0
 total_js=0
@@ -128,16 +112,17 @@ if [ -d "$WEBAPP_DIR/assets/pkg/snippets" ]; then
   done < <(find "$WEBAPP_DIR/assets/pkg/snippets" -type f -name "*.js" -print0)
 fi
 
+# Print totals
+echo "---"
 formatted=$(format_bytes "$total_wasm")
-printf "%-30s %10s (%s bytes)\n" "Total WASM:" "$formatted" "$total_wasm"
-
-formatted=$(format_bytes "$total_static")
-printf "%-30s %10s (%s bytes)\n" "Total Static Assets:" "$formatted" "$total_static"
+printf "  %-24s %8s\n" "Total WASM:" "$formatted"
 
 formatted=$(format_bytes "$total_js")
-printf "%-30s %10s (%s bytes)\n" "Total JavaScript:" "$formatted" "$total_js"
+printf "  %-24s %8s\n" "Total JS:" "$formatted"
+
+formatted=$(format_bytes "$total_static")
+printf "  %-24s %8s\n" "Total Static:" "$formatted"
 
 grand_total=$((total_wasm + total_static + total_js))
 formatted=$(format_bytes "$grand_total")
-echo ""
-printf "%-30s %10s (%s bytes)\n" "Grand Total:" "$formatted" "$grand_total"
+printf "  %-24s %8s\n" "Total:" "$formatted"
