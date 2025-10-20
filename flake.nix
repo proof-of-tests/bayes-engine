@@ -176,10 +176,10 @@
 
           # Use default ports or allow override via environment
           WRANGLER_PORT=''${WRANGLER_PORT:-$(find_available_port 8787)}
-          GECKODRIVER_PORT=''${GECKODRIVER_PORT:-$(find_available_port 4444)}
+          WEBDRIVER_PORT=''${WEBDRIVER_PORT:-$(find_available_port 4444)}
 
           echo "Using wrangler port: $WRANGLER_PORT"
-          echo "Using geckodriver port: $GECKODRIVER_PORT"
+          echo "Using webdriver port: $WEBDRIVER_PORT"
 
           # Start wrangler dev in the background
           HOME="$(mktemp -d)" ${wrangler.packages.${system}.default}/bin/wrangler dev --port $WRANGLER_PORT --local &
@@ -190,33 +190,43 @@
             exit 1
           fi
 
-          # Find Firefox binary
+          # Start appropriate WebDriver for the platform
           ${if pkgs.stdenv.isDarwin then ''
-            # On macOS, look for Firefox in common locations
-            if [ -f "/Applications/Firefox.app/Contents/MacOS/firefox" ]; then
-              FIREFOX_BIN="/Applications/Firefox.app/Contents/MacOS/firefox"
-            elif [ -f "$HOME/Applications/Firefox.app/Contents/MacOS/firefox" ]; then
-              FIREFOX_BIN="$HOME/Applications/Firefox.app/Contents/MacOS/firefox"
-            else
-              echo "ERROR: Firefox not found. Please install Firefox from https://www.mozilla.org/firefox/" >&2
-              echo "Expected location: /Applications/Firefox.app" >&2
+            # On macOS, use Safari with safaridriver (built into macOS)
+            echo "Using Safari with safaridriver"
+            export E2E_BROWSER=safari
+
+            # Check if safaridriver is available
+            if ! command -v safaridriver >/dev/null 2>&1; then
+              echo "ERROR: safaridriver not found" >&2
+              echo "Safari's WebDriver support should be built into macOS" >&2
               exit 1
             fi
-            echo "Using Firefox at: $FIREFOX_BIN"
+
+            # Enable automation if not already enabled (may require sudo, so we try but don't fail)
+            safaridriver --enable 2>/dev/null || echo "Note: If this fails, run 'sudo safaridriver --enable' once"
+
+            # Start safaridriver
+            safaridriver --port $WEBDRIVER_PORT &
+            WEBDRIVER_PID=$!
+            echo "Started safaridriver with PID $WEBDRIVER_PID"
           '' else ''
-            FIREFOX_BIN="${pkgs.firefox}/bin/firefox"
+            # On Linux, use Firefox with geckodriver
+            echo "Using Firefox with geckodriver"
+            export E2E_BROWSER=firefox
+
+            HOME="$(mktemp -d)" ${pkgs.geckodriver}/bin/geckodriver --binary "${pkgs.firefox}/bin/firefox" --port $WEBDRIVER_PORT 2>&1 &
+            WEBDRIVER_PID=$!
+            echo "Started geckodriver with PID $WEBDRIVER_PID"
           ''}
 
-          HOME="$(mktemp -d)" ${pkgs.geckodriver}/bin/geckodriver --binary "$FIREFOX_BIN" --port $GECKODRIVER_PORT 2>&1 &
-          GECKODRIVER_PID=$!
-          echo "Started geckodriver with PID $GECKODRIVER_PID"
-          if ! wait-for-connection http://localhost:$GECKODRIVER_PORT; then
-            echo "ERROR: Failed to start geckodriver on port $GECKODRIVER_PORT" >&2
+          if ! wait-for-connection http://localhost:$WEBDRIVER_PORT; then
+            echo "ERROR: Failed to start webdriver on port $WEBDRIVER_PORT" >&2
             exit 1
           fi
 
-          # Export ports for the test to use
-          export GECKODRIVER_PORT
+          # Export environment variables for the test
+          export WEBDRIVER_PORT
           export WRANGLER_PORT
 
           # Run the e2e tests
@@ -255,9 +265,11 @@
               { }
               ''
                 echo "E2E tests cannot run in nix sandbox on macOS"
-                echo "To run e2e tests locally:"
-                echo "  1. Install Firefox from https://www.mozilla.org/firefox/"
+                echo "To run e2e tests locally with Safari:"
+                echo "  1. Enable Safari's WebDriver: sudo safaridriver --enable"
                 echo "  2. Run: nix run .#run-e2e-tests"
+                echo ""
+                echo "Note: Safari is used on macOS (built-in), Firefox on Linux"
                 echo ""
                 echo "Verifying test binary exists: ${cargoBuild}/bin/e2e_tests"
                 test -f ${cargoBuild}/bin/e2e_tests || exit 1

@@ -3,16 +3,35 @@ use thirtyfour::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Read ports from environment variables (set by nix build)
-    let geckodriver_port = std::env::var("GECKODRIVER_PORT").unwrap_or_else(|_| "4444".to_string());
+    // Read configuration from environment variables (set by nix build)
+    let browser = std::env::var("E2E_BROWSER").unwrap_or_else(|_| "safari".to_string());
+    let webdriver_port = std::env::var("WEBDRIVER_PORT").unwrap_or_else(|_| "4444".to_string());
     let wrangler_port = std::env::var("WRANGLER_PORT").unwrap_or_else(|_| "8787".to_string());
 
-    let geckodriver_url = format!("http://localhost:{}", geckodriver_port);
+    let webdriver_url = format!("http://localhost:{}", webdriver_port);
     let webapp_url = format!("http://localhost:{}", wrangler_port);
 
-    let mut caps = DesiredCapabilities::firefox();
-    caps.set_headless()?;
-    let driver = WebDriver::new(&geckodriver_url, caps).await?;
+    // Configure browser capabilities and connect based on environment
+    println!("Connecting to {} via {}", browser, webdriver_url);
+    let driver = match browser.as_str() {
+        "safari" => {
+            // Safari doesn't support headless mode via standard WebDriver
+            // but safaridriver handles this automatically
+            let caps = DesiredCapabilities::safari();
+            WebDriver::new(&webdriver_url, caps).await?
+        }
+        "firefox" => {
+            let mut caps = DesiredCapabilities::firefox();
+            caps.set_headless()?;
+            WebDriver::new(&webdriver_url, caps).await?
+        }
+        _ => {
+            anyhow::bail!(
+                "Unsupported browser: {}. Use 'safari' or 'firefox'",
+                browser
+            );
+        }
+    };
 
     run(&driver, &webapp_url).await?;
 
