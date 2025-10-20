@@ -7,11 +7,9 @@ echo "=== Building client WASM ==="
 export HOME=$TMPDIR
 mkdir -p "$HOME/.cache"
 
-# Build client WASM with wasm-pack
+# Build client WASM with wasm-pack from workspace root
 mkdir -p assets/pkg
-cd client
-wasm-pack build --release --target web --out-dir ../assets/pkg --no-typescript --mode no-install
-cd ..
+wasm-pack build --release --target web --out-dir assets/pkg --no-typescript --mode no-install client
 
 # Copy static HTML and CSS to assets
 echo "Copying static assets..."

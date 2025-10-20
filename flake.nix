@@ -95,20 +95,11 @@
           pkgs.nodejs_22
         ];
 
-        # Build the client WASM
-        client = craneLibWasm.buildPackage {
+        # Common arguments for client builds
+        clientCommonArgs = {
           inherit src;
           strictDeps = true;
           nativeBuildInputs = wasmNativeBuildInputs;
-
-          cargoArtifacts = craneLibWasm.buildDepsOnly {
-            inherit src;
-            strictDeps = true;
-            nativeBuildInputs = wasmNativeBuildInputs;
-          };
-
-          # We're not installing cargo binaries, we're copying build artifacts
-          doNotPostBuildInstallCargoBinaries = true;
 
           # Can't run wasm tests natively
           doCheck = false;
@@ -118,6 +109,17 @@
             chmod -R +w $sourceRoot
           '';
 
+          # Build dependencies for wasm32 target (matching what wasm-pack will use)
+          cargoExtraArgs = "--target wasm32-unknown-unknown";
+        };
+
+        # Build the client WASM
+        client = craneLibWasm.buildPackage (clientCommonArgs // {
+          cargoArtifacts = craneLibWasm.buildDepsOnly clientCommonArgs;
+
+          # We're not installing cargo binaries, we're copying build artifacts
+          doNotPostBuildInstallCargoBinaries = true;
+
           buildPhase = ''
             ${pkgs.bash}/bin/bash ${./nix/build-client.sh}
           '';
@@ -126,10 +128,10 @@
             mkdir -p $out
             cp -r assets $out/
           '';
-        };
+        });
 
-        # Build the server Worker
-        server = craneLibWasm.buildPackage {
+        # Common arguments for server builds
+        serverCommonArgs = {
           inherit src;
           strictDeps = true;
           nativeBuildInputs = [
@@ -139,20 +141,6 @@
             pkgs.nodejs_22
           ];
 
-          cargoArtifacts = craneLibWasm.buildDepsOnly {
-            inherit src;
-            strictDeps = true;
-            nativeBuildInputs = [
-              pkgs.worker-build
-              pkgs.wasm-bindgen-cli
-              esbuild_0_25_10
-              pkgs.nodejs_22
-            ];
-          };
-
-          # We're not installing cargo binaries, we're copying build artifacts
-          doNotPostBuildInstallCargoBinaries = true;
-
           # Can't run wasm tests natively
           doCheck = false;
 
@@ -160,6 +148,17 @@
           postUnpack = ''
             chmod -R +w $sourceRoot
           '';
+
+          # Build dependencies for wasm32 target (matching what worker-build will use)
+          cargoExtraArgs = "--target wasm32-unknown-unknown";
+        };
+
+        # Build the server Worker
+        server = craneLibWasm.buildPackage (serverCommonArgs // {
+          cargoArtifacts = craneLibWasm.buildDepsOnly serverCommonArgs;
+
+          # We're not installing cargo binaries, we're copying build artifacts
+          doNotPostBuildInstallCargoBinaries = true;
 
           buildPhase = ''
             ${pkgs.bash}/bin/bash ${./nix/build-server.sh}
@@ -169,7 +168,7 @@
             mkdir -p $out
             cp -r server/build/* $out/
           '';
-        };
+        });
 
         # Combine client and server into webapp
         webapp = pkgs.runCommand "webapp"
