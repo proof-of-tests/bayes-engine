@@ -33,7 +33,7 @@ ln -sf "$(command -v esbuild)" "$HOME/.cache/worker-build/esbuild-$ESBUILD_PLATF
 echo "Building client WASM..."
 mkdir -p assets/pkg
 cd client
-wasm-pack build --target web --out-dir ../assets/pkg --no-typescript --mode no-install
+wasm-pack build --release --target web --out-dir ../assets/pkg --no-typescript --mode no-install
 cd ..
 
 # Copy static HTML and CSS to assets
