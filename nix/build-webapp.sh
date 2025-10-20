@@ -32,20 +32,18 @@ ln -sf "$(command -v esbuild)" "$HOME/.cache/worker-build/esbuild-$ESBUILD_PLATF
 # Build client WASM and prepare assets directory
 echo "Building client WASM..."
 mkdir -p assets/pkg
-cd client
-cargo build --target wasm32-unknown-unknown --release
-wasm-bindgen ../target/wasm32-unknown-unknown/release/client.wasm \
-  --out-dir ../assets/pkg \
+cargo build --target wasm32-unknown-unknown --release --package client
+wasm-bindgen target/wasm32-unknown-unknown/release/client.wasm \
+  --out-dir assets/pkg \
   --target web \
   --no-typescript
 # Run wasm-opt for size optimization
-wasm-opt ../assets/pkg/client_bg.wasm -o ../assets/pkg/client_bg.wasm \
+wasm-opt assets/pkg/client_bg.wasm -o assets/pkg/client_bg.wasm \
   -Oz \
   --enable-bulk-memory \
   --enable-mutable-globals \
   --enable-sign-ext \
   --enable-nontrapping-float-to-int
-cd ..
 
 # Copy static HTML and CSS to assets
 echo "Copying static assets..."
