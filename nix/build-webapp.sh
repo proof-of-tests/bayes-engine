@@ -52,4 +52,11 @@ cd ..
 echo "Moving build output..."
 mv server/build .
 
+# Generate content hash for deployment comparison
+echo "Generating content hash..."
+# Hash all files in the assets directory, sorted for consistency
+CONTENT_HASH=$(find assets -type f -exec sha256sum {} \; | sort | sha256sum | cut -d' ' -f1)
+echo "$CONTENT_HASH" > assets/content-hash.txt
+echo "Content hash: $CONTENT_HASH"
+
 echo "=== Build complete ==="
