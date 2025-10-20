@@ -170,6 +170,9 @@
             inherit (commonArgs) src;
             inherit advisory-db;
           };
+
+          # Build webapp with wasm
+          webapp-build = webapp;
         };
 
         # Packages
