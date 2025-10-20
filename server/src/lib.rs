@@ -1,15 +1,37 @@
+use serde::{Deserialize, Serialize};
 use worker::*;
+
+#[derive(Deserialize)]
+struct UppercaseRequest {
+    text: String,
+}
+
+#[derive(Serialize)]
+struct UppercaseResponse {
+    result: String,
+}
 
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: worker::Context) -> Result<Response> {
     console_error_panic_hook::set_once();
 
-    // All static assets (HTML, CSS, WASM) are served automatically by CloudFlare
-    // from the assets directory configured in wrangler.toml.
-    //
-    // This Worker only handles dynamic API routes.
-    // For now, we don't have any API routes, so we just pass through to assets.
+    // Create a router to handle different routes
+    let router = Router::new();
 
-    // Fetch from assets (binding name is "ASSETS" by default)
-    env.assets("ASSETS")?.fetch_request(req).await
+    router
+        .post_async("/api/uppercase", |mut req, _ctx| async move {
+            // Parse the JSON request body
+            let body: UppercaseRequest = req.json().await?;
+
+            // Convert text to uppercase
+            let result = body.text.to_uppercase();
+
+            // Create response
+            let response = UppercaseResponse { result };
+
+            // Return JSON response
+            Response::from_json(&response)
+        })
+        .run(req, env)
+        .await
 }
