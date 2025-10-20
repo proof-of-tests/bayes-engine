@@ -45,7 +45,7 @@ cp public/style.css assets/style.css
 echo "Building server worker..."
 cd server
 cargo --version
-worker-build --release --mode no-install
+worker-build --release --mode no-install --package server
 cd ..
 
 # Move server build output to root
