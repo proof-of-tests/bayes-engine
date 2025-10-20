@@ -35,7 +35,7 @@ mkdir -p assets/pkg
 cargo build --target wasm32-unknown-unknown --release --package client
 wasm-bindgen target/wasm32-unknown-unknown/release/client.wasm \
   --out-dir assets/pkg \
-  --target web \
+  --target module \
   --no-typescript
 # Run wasm-opt for size optimization
 wasm-opt assets/pkg/client_bg.wasm -o assets/pkg/client_bg.wasm \
