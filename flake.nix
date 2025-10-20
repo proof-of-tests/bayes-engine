@@ -54,6 +54,25 @@
             (builtins.match ".*/public/.*" path != null);
         };
 
+        # Source filtering for client-only builds
+        clientSrc = pkgs.lib.cleanSourceWith {
+          src = ./.;
+          filter = path: type:
+            (craneLib.filterCargoSources path type) ||
+            (builtins.match ".*/public/.*" path != null) ||
+            # Only include client and workspace Cargo files
+            (builtins.match ".*/client/.*" path != null);
+        };
+
+        # Source filtering for server-only builds
+        serverSrc = pkgs.lib.cleanSourceWith {
+          src = ./.;
+          filter = path: type:
+            (craneLib.filterCargoSources path type) ||
+            # Only include server and workspace Cargo files
+            (builtins.match ".*/server/.*" path != null);
+        };
+
         # Common arguments for all Crane builds
         commonArgs = {
           inherit src;
@@ -68,23 +87,68 @@
         # Get esbuild 0.25.10 from the esbuild flake
         esbuild_0_25_10 = esbuild.packages.${system}.default;
 
-        # Common arguments for wasm builds
-        commonArgsWasm = {
+        # Common native build inputs for WASM builds
+        wasmNativeBuildInputs = [
+          pkgs.wasm-bindgen-cli
+          pkgs.wasm-pack
+          pkgs.binaryen
+          pkgs.nodejs_22
+        ];
+
+        # Build the client WASM
+        client = craneLibWasm.buildPackage {
+          inherit src;
+          strictDeps = true;
+          nativeBuildInputs = wasmNativeBuildInputs;
+
+          cargoArtifacts = craneLibWasm.buildDepsOnly {
+            inherit src;
+            strictDeps = true;
+            nativeBuildInputs = wasmNativeBuildInputs;
+          };
+
+          # We're not installing cargo binaries, we're copying build artifacts
+          doNotPostBuildInstallCargoBinaries = true;
+
+          # Can't run wasm tests natively
+          doCheck = false;
+
+          # Make source writable since wasm-pack creates directories
+          postUnpack = ''
+            chmod -R +w $sourceRoot
+          '';
+
+          buildPhase = ''
+            ${pkgs.bash}/bin/bash ${./nix/build-client.sh}
+          '';
+
+          installPhaseCommand = ''
+            mkdir -p $out
+            cp -r assets $out/
+          '';
+        };
+
+        # Build the server Worker
+        server = craneLibWasm.buildPackage {
           inherit src;
           strictDeps = true;
           nativeBuildInputs = [
             pkgs.worker-build
             pkgs.wasm-bindgen-cli
-            pkgs.wasm-pack
-            pkgs.binaryen
             esbuild_0_25_10
             pkgs.nodejs_22
           ];
-        };
 
-        # Build the webapp with worker-build
-        webapp = craneLibWasm.buildPackage (commonArgsWasm // {
-          cargoArtifacts = craneLibWasm.buildDepsOnly commonArgsWasm;
+          cargoArtifacts = craneLibWasm.buildDepsOnly {
+            inherit src;
+            strictDeps = true;
+            nativeBuildInputs = [
+              pkgs.worker-build
+              pkgs.wasm-bindgen-cli
+              esbuild_0_25_10
+              pkgs.nodejs_22
+            ];
+          };
 
           # We're not installing cargo binaries, we're copying build artifacts
           doNotPostBuildInstallCargoBinaries = true;
@@ -98,15 +162,26 @@
           '';
 
           buildPhase = ''
-            ${pkgs.bash}/bin/bash ${./nix/build-webapp.sh}
+            ${pkgs.bash}/bin/bash ${./nix/build-server.sh}
           '';
 
           installPhaseCommand = ''
             mkdir -p $out
-            cp -r build/* $out/
-            cp -r assets $out/
+            cp -r server/build/* $out/
           '';
-        });
+        };
+
+        # Combine client and server into webapp
+        webapp = pkgs.runCommand "webapp"
+          {
+            inherit client server;
+          } ''
+          mkdir -p $out
+          # Copy server build output
+          cp -r ${server}/* $out/
+          # Copy client assets
+          cp -r ${client}/assets $out/
+        '';
       in
       {
         checks = {
@@ -179,7 +254,7 @@
         packages = {
           default = cargoBuild;
           bayes-engine = cargoBuild;
-          inherit webapp;
+          inherit webapp client server;
         };
 
         apps = {
