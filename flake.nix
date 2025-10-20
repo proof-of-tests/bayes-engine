@@ -75,7 +75,6 @@
           nativeBuildInputs = [
             pkgs.worker-build
             pkgs.wasm-bindgen-cli
-            pkgs.wasm-pack
             pkgs.binaryen
             esbuild_0_25_10
             pkgs.nodejs_22
