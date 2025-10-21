@@ -3,6 +3,10 @@ use gloo_net::http::Request;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
+mod hyperloglog;
+mod hyperloglog_demo;
+use hyperloglog_demo::HyperLogLogDemo;
+
 #[derive(Serialize)]
 struct UppercaseRequest {
     text: String,
@@ -33,6 +37,8 @@ fn App() -> Element {
         div { class: "container",
             h1 { "Hello World!" }
             p { "This is a Dioxus WASM app running on CloudFlare Workers" }
+
+            HyperLogLogDemo {}
 
             div { class: "counter-section",
                 p { class: "counter-label", "Click Counter:" }

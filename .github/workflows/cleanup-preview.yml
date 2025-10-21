@@ -29,7 +29,7 @@ jobs:
           command: delete --name bayes-engine-pr-${{ github.event.pull_request.number }}
 
       - name: Comment on PR
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const prNumber = context.issue.number;
