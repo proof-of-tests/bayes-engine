@@ -25,6 +25,7 @@
         pkgs = import nixpkgs {
           inherit system;
           overlays = [ rust-overlay.overlays.default ];
+          config.allowUnfree = true;
         };
 
         # Load Rust toolchain from rust-toolchain.toml
@@ -41,25 +42,43 @@
         # Create craneLib for wasm builds
         craneLibWasm = (crane.mkLib pkgs).overrideToolchain rustToolchainWasm;
 
-        # Common source filtering - include static, public, and JS files for assets and worker code
+        # Common source filtering - include static, public, JS files, and e2e_tests for assets and worker code
         src = pkgs.lib.cleanSourceWith {
           src = ./.;
           filter = path: type:
+            let
+              basePath = baseNameOf path;
+            in
             (craneLib.filterCargoSources path type) ||
             (builtins.match ".*/static/.*" path != null) ||
             (builtins.match ".*/public/.*" path != null) ||
-            (builtins.match ".*\\.js$" path != null);
+            (builtins.match ".*\\.js$" path != null) ||
+            # Include e2e_tests directory and its contents
+            (basePath == "e2e_tests" && type == "directory") ||
+            (builtins.match ".*/e2e_tests/.*" path != null);
         };
 
         # Common arguments for all Crane builds
         commonArgs = {
           inherit src;
           strictDeps = true;
+          # Exclude e2e_tests from the main build
+          cargoExtraArgs = "--workspace --exclude e2e_tests";
         };
 
         # Build the workspace
         cargoBuild = craneLib.buildPackage (commonArgs // {
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+          # Don't run tests during the main build
+          doCheck = false;
+        });
+
+        # Build e2e_tests binary separately (native-only, for testing)
+        e2eTests = craneLib.buildPackage (commonArgs // {
+          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+          pname = "e2e_tests";
+          cargoExtraArgs = "--package e2e_tests";
+          doCheck = false;
         });
 
         # Common arguments for wasm builds
@@ -67,6 +86,8 @@
           inherit src;
           strictDeps = true;
           CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
+          # Exclude e2e_tests from WASM builds (it's native-only)
+          cargoExtraArgs = "--workspace --exclude e2e_tests";
         };
 
         # Step 1: Build WASM files (client and server) with cached dependencies
@@ -182,7 +203,7 @@
         packages = {
           default = cargoBuild;
           bayes-engine = cargoBuild;
-          inherit webapp wasmBuild;
+          inherit webapp wasmBuild e2eTests;
         };
 
         apps = {
@@ -201,6 +222,19 @@
             program = "${pkgs.writeShellScript "report-sizes" ''
               export PATH="${pkgs.lib.makeBinPath [ pkgs.coreutils pkgs.findutils ]}:$PATH"
               exec ${pkgs.bash}/bin/bash ${./nix/report-sizes.sh} ${webapp}
+            ''}";
+          };
+
+          # Run end-to-end tests
+          run-e2e-tests = {
+            type = "app";
+            program = "${pkgs.writeShellScript "run-e2e-tests" ''
+              export PATH="${pkgs.lib.makeBinPath [ pkgs.util-linux pkgs.procps pkgs.coreutils pkgs.geckodriver ]}:$PATH"
+              export WEBAPP_PATH="${webapp}"
+              export CURL_BIN="${pkgs.curl}/bin/curl"
+              export WRANGLER_BIN="${wrangler.packages.${system}.default}/bin/wrangler"
+              export E2E_TESTS_BIN="${e2eTests}/bin/e2e_tests"
+              exec ${pkgs.bash}/bin/bash ${./nix/run-e2e-tests.sh}
             ''}";
           };
         };
