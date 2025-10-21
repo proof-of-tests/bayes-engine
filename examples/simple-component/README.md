@@ -22,6 +22,7 @@ The compiled module will be in `target/wasm32-unknown-unknown/release/simple_was
 6. Click "Execute" to run it
 
 The module exports:
+
 - `add(a, b)` - Adds two numbers
 - `get_greeting()` - Returns a simple value
 
