@@ -5,7 +5,9 @@ use wasm_bindgen::prelude::*;
 
 mod hyperloglog;
 mod hyperloglog_demo;
+mod messages_demo;
 use hyperloglog_demo::HyperLogLogDemo;
+use messages_demo::MessagesDemo;
 
 #[derive(Serialize)]
 struct UppercaseRequest {
@@ -15,6 +17,21 @@ struct UppercaseRequest {
 #[derive(Deserialize)]
 struct UppercaseResponse {
     result: String,
+}
+
+#[derive(Serialize)]
+pub struct MessageRequest {
+    pub message: String,
+}
+
+#[derive(Deserialize, Clone, PartialEq)]
+pub struct Message {
+    pub message: String,
+}
+
+#[derive(Deserialize)]
+pub struct MessagesResponse {
+    pub messages: Vec<Message>,
 }
 
 // WASM entry point for the Dioxus web app (client-side)
@@ -37,6 +54,8 @@ fn App() -> Element {
         div { class: "container",
             h1 { "Hello World!" }
             p { "This is a Dioxus WASM app running on CloudFlare Workers" }
+
+            MessagesDemo {}
 
             HyperLogLogDemo {}
 

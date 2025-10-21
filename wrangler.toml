@@ -10,6 +10,14 @@ command = "nix build .#webapp"
 [assets]
 directory = "result/assets"
 
+# KV namespace for storing messages
+# Note: Using KV as a temporary workaround for WASM compatibility
+# Long-term solution should use Postgres via Hyperdrive or D1
+[[kv_namespaces]]
+binding = "MESSAGES"
+id = "placeholder_id"
+preview_id = "placeholder_preview_id"
+
 # E2E testing environment - uses pre-compiled files without running build
 [env.e2e]
 # No build command - assumes result/ directory already exists with compiled files
