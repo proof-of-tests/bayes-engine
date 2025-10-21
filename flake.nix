@@ -17,13 +17,9 @@
       url = "github:rustsec/advisory-db";
       flake = false;
     };
-    esbuild = {
-      url = "path:./nix/esbuild";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
-  outputs = { self, nixpkgs, flake-utils, crane, rust-overlay, wrangler, advisory-db, esbuild }:
+  outputs = { self, nixpkgs, flake-utils, crane, rust-overlay, wrangler, advisory-db }:
     flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (system:
       let
         pkgs = import nixpkgs {
@@ -65,9 +61,6 @@
         cargoBuild = craneLib.buildPackage (commonArgs // {
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
         });
-
-        # Get esbuild 0.25.10 from the esbuild flake
-        esbuild_0_25_10 = esbuild.packages.${system}.default;
 
         # Common arguments for wasm builds
         commonArgsWasm = {
