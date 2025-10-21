@@ -39,11 +39,12 @@ report_file() {
 }
 
 # Report WASM files
-report_file "$WEBAPP_DIR/index_bg.wasm" "Server WASM"
+report_file "$WEBAPP_DIR/worker/server_bg.wasm" "Server WASM"
 report_file "$WEBAPP_DIR/assets/pkg/client_bg.wasm" "Client WASM"
 
 # Report JavaScript files
-report_file "$WEBAPP_DIR/index.js" "Server JS"
+report_file "$WEBAPP_DIR/worker/server.js" "Server JS"
+report_file "$WEBAPP_DIR/worker/worker.js" "Worker wrapper JS"
 report_file "$WEBAPP_DIR/assets/pkg/client.js" "Client JS"
 
 # Calculate total JS snippets size
@@ -71,8 +72,8 @@ total_static=0
 total_js=0
 
 # Add server WASM
-if [ -f "$WEBAPP_DIR/index_bg.wasm" ]; then
-  size=$(stat -f%z "$WEBAPP_DIR/index_bg.wasm" 2>/dev/null || stat -c%s "$WEBAPP_DIR/index_bg.wasm" 2>/dev/null)
+if [ -f "$WEBAPP_DIR/worker/server_bg.wasm" ]; then
+  size=$(stat -f%z "$WEBAPP_DIR/worker/server_bg.wasm" 2>/dev/null || stat -c%s "$WEBAPP_DIR/worker/server_bg.wasm" 2>/dev/null)
   total_wasm=$((total_wasm + size))
 fi
 
@@ -94,8 +95,13 @@ if [ -f "$WEBAPP_DIR/assets/style.css" ]; then
 fi
 
 # Add all JS files
-if [ -f "$WEBAPP_DIR/index.js" ]; then
-  size=$(stat -f%z "$WEBAPP_DIR/index.js" 2>/dev/null || stat -c%s "$WEBAPP_DIR/index.js" 2>/dev/null)
+if [ -f "$WEBAPP_DIR/worker/server.js" ]; then
+  size=$(stat -f%z "$WEBAPP_DIR/worker/server.js" 2>/dev/null || stat -c%s "$WEBAPP_DIR/worker/server.js" 2>/dev/null)
+  total_js=$((total_js + size))
+fi
+
+if [ -f "$WEBAPP_DIR/worker/worker.js" ]; then
+  size=$(stat -f%z "$WEBAPP_DIR/worker/worker.js" 2>/dev/null || stat -c%s "$WEBAPP_DIR/worker/worker.js" 2>/dev/null)
   total_js=$((total_js + size))
 fi
 
