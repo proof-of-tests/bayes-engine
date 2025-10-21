@@ -60,6 +60,14 @@ pub async fn run(driver: &WebDriver, webapp_url: &str) -> Result<()> {
     println!("Waiting for page to load and hydrate...");
     tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
+    // Navigate to the tests page by clicking the link
+    println!("Navigating to tests page...");
+    let tests_link = driver.find(By::Css("a[href='/tests']")).await?;
+    tests_link.click().await?;
+
+    // Wait for navigation and re-render
+    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
     // Test 1: Counter functionality
     println!("Testing counter button...");
     let counter_display = driver.find(By::Css(".counter-display")).await?;
