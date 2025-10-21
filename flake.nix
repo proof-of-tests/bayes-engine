@@ -75,7 +75,6 @@
           strictDeps = true;
           nativeBuildInputs = [
             pkgs.wasm-bindgen-cli
-            pkgs.wasm-pack
             pkgs.binaryen
             pkgs.nodejs_22
           ];
