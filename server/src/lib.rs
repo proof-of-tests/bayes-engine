@@ -29,7 +29,7 @@ struct MessagesResponse {
 /// Establishes a connection to the Postgres database via Hyperdrive
 async fn connect_to_db(env: &Env) -> Result<tokio_postgres::Client> {
     // Get Hyperdrive configuration
-    let hyperdrive = env.hyperdrive("DB")?;
+    let hyperdrive = env.hyperdrive("HYPERDRIVE")?;
 
     // Establish socket connection with TLS
     let socket = Socket::builder()

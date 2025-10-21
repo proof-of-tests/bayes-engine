@@ -11,12 +11,9 @@ command = "nix build .#webapp"
 directory = "result/assets"
 
 # Hyperdrive database binding for Postgres connectivity
-# To set up:
-# 1. Create Hyperdrive configuration: wrangler hyperdrive create bayes-db --connection-string="<your-postgres-connection-string>"
-# 2. Update the 'id' below with the Hyperdrive ID from step 1
 [[hyperdrive]]
-binding = "DB"
-id = "your-hyperdrive-id-here"
+binding = "HYPERDRIVE"
+id = "a88d53af1e344d80bdd1ab8f88692b14"
 
 # E2E testing environment - uses pre-compiled files without running build
 [env.e2e]
