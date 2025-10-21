@@ -17,13 +17,9 @@
       url = "github:rustsec/advisory-db";
       flake = false;
     };
-    esbuild = {
-      url = "path:./nix/esbuild";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
-  outputs = { self, nixpkgs, flake-utils, crane, rust-overlay, wrangler, advisory-db, esbuild }:
+  outputs = { self, nixpkgs, flake-utils, crane, rust-overlay, wrangler, advisory-db }:
     flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (system:
       let
         pkgs = import nixpkgs {
@@ -66,45 +62,54 @@
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
         });
 
-        # Get esbuild 0.25.10 from the esbuild flake
-        esbuild_0_25_10 = esbuild.packages.${system}.default;
-
         # Common arguments for wasm builds
         commonArgsWasm = {
           inherit src;
           strictDeps = true;
-          nativeBuildInputs = [
-            pkgs.wasm-bindgen-cli
-            pkgs.binaryen
-            pkgs.nodejs_22
-          ];
+          CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
         };
 
-        # Build the webapp with manual WASM compilation
-        webapp = craneLibWasm.buildPackage (commonArgsWasm // {
+        # Step 1: Build WASM files (client and server) with cached dependencies
+        wasmBuild = craneLibWasm.buildPackage (commonArgsWasm // {
           cargoArtifacts = craneLibWasm.buildDepsOnly commonArgsWasm;
 
-          # We're not installing cargo binaries, we're copying build artifacts
+          # We're not installing cargo binaries, we're copying WASM artifacts
           doNotPostBuildInstallCargoBinaries = true;
 
           # Can't run wasm tests natively
           doCheck = false;
 
-          # Make source writable since we create a build directory
-          postUnpack = ''
-            chmod -R +w $sourceRoot
-          '';
-
-          buildPhase = ''
-            ${pkgs.bash}/bin/bash ${./nix/build-webapp-manual.sh}
-          '';
+          CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
 
           installPhaseCommand = ''
+            mkdir -p $out
+            cp target/wasm32-unknown-unknown/release/client.wasm $out/
+            cp target/wasm32-unknown-unknown/release/server.wasm $out/
+          '';
+        });
+
+        # Step 2: Post-process WASM files with wasm-bindgen and wasm-opt
+        webapp = pkgs.stdenv.mkDerivation {
+          name = "bayes-engine-webapp";
+          inherit src;
+
+          nativeBuildInputs = [
+            pkgs.wasm-bindgen-cli
+            pkgs.binaryen
+            pkgs.findutils
+            pkgs.coreutils
+          ];
+
+          buildPhase = ''
+            ${pkgs.bash}/bin/bash ${./nix/process-wasm.sh} ${wasmBuild}
+          '';
+
+          installPhase = ''
             mkdir -p $out
             cp -r build/* $out/
             cp -r assets $out/
           '';
-        });
+        };
       in
       {
         checks = {
@@ -177,7 +182,7 @@
         packages = {
           default = cargoBuild;
           bayes-engine = cargoBuild;
-          inherit webapp;
+          inherit webapp wasmBuild;
         };
 
         apps = {
