@@ -2,8 +2,8 @@ name = "bayes-engine"
 main = "result/worker/shim.mjs"
 compatibility_date = "2024-10-01"
 
-# [build]
-# command = "nix build .#webapp --out-link build-result && rm -rf build && cp -r build-result build"
+[build]
+command = "nix build .#webapp"
 
 # Serve static assets (HTML, CSS, WASM) from the assets directory
 # CloudFlare Workers will automatically serve these files
