@@ -94,7 +94,7 @@ pub fn WasmExecutor() -> Element {
                 execution_output.set(String::new());
                 error_message.set(String::new());
 
-                match execute_wasm(&wasm_file.data).await {
+                match execute_wasm_module(&wasm_file.data).await {
                     Ok(output) => {
                         execution_output.set(output);
                     }
@@ -129,10 +129,10 @@ pub fn WasmExecutor() -> Element {
     rsx! {
         div { class: "wasm-executor-section",
             h2 { "WebAssembly Executor" }
-            p { "Upload and execute WASM files in your browser" }
+            p { "Upload and execute WebAssembly modules using wasmi" }
 
             div { class: "upload-section",
-                h3 { "Upload WASM File" }
+                h3 { "Upload WASM Module" }
                 input {
                     r#type: "file",
                     accept: ".wasm",
@@ -144,7 +144,7 @@ pub fn WasmExecutor() -> Element {
                 div {}
             } } else { rsx! {
                 div { class: "stored-files-section",
-                    h3 { "Stored Files" }
+                    h3 { "Stored Modules" }
                     ul { class: "file-list",
                         {stored_files().iter().map(|file_name| {
                             let fname = file_name.clone();
@@ -178,7 +178,7 @@ pub fn WasmExecutor() -> Element {
                         class: "execute-button",
                         disabled: is_executing(),
                         onclick: handle_execute,
-                        {if is_executing() { "Executing..." } else { "Execute WASM" }}
+                        {if is_executing() { "Executing..." } else { "Execute Module" }}
                     }
                 }
             })}
@@ -202,121 +202,50 @@ pub fn WasmExecutor() -> Element {
     }
 }
 
-async fn execute_wasm(wasm_bytes: &[u8]) -> Result<String, String> {
-    use js_sys::{Object, Reflect, Uint8Array, WebAssembly};
-    use std::cell::RefCell;
-    use std::rc::Rc;
+async fn execute_wasm_module(wasm_bytes: &[u8]) -> Result<String, String> {
+    use wasmi::{Engine, Linker, Module, Store};
 
-    // Capture stdout
-    let stdout = Rc::new(RefCell::new(String::new()));
+    // Create an engine and store
+    let engine = Engine::default();
+    let mut store = Store::new(&engine, ());
 
-    // Create a simple WASI-like import object with fd_write for stdout
-    let imports = Object::new();
-    let wasi_snapshot_preview1 = Object::new();
+    // Parse the WASM module
+    let module = Module::new(&engine, wasm_bytes)
+        .map_err(|e| format!("Failed to parse module: {}", e))?;
 
-    // Implement fd_write for stdout capture
-    let fd_write_closure = Closure::wrap(Box::new(
-        move |_fd: u32, _iovs: u32, _iovs_len: u32, _nwritten: u32| -> u32 {
-            0 // Success
-        },
-    ) as Box<dyn Fn(u32, u32, u32, u32) -> u32>);
+    // Create a linker (for imports)
+    let linker = Linker::new(&engine);
 
-    let _ = Reflect::set(
-        &wasi_snapshot_preview1,
-        &"fd_write".into(),
-        fd_write_closure.as_ref(),
-    );
+    // Instantiate the module
+    let instance = linker
+        .instantiate(&mut store, &module)
+        .map_err(|e| format!("Failed to instantiate module: {}", e))?
+        .ensure_no_start(&mut store)
+        .map_err(|e| format!("Failed to ensure no start: {}", e))?;
 
-    // Add proc_exit
-    let proc_exit_closure = Closure::wrap(Box::new(move |_code: u32| {
-        // Do nothing, just prevent errors
-    }) as Box<dyn Fn(u32)>);
-
-    let _ = Reflect::set(
-        &wasi_snapshot_preview1,
-        &"proc_exit".into(),
-        proc_exit_closure.as_ref(),
-    );
-
-    // Add environ_sizes_get
-    let environ_sizes_closure = Closure::wrap(Box::new(move |_: u32, _: u32| -> u32 {
-        0 // Success, no environment variables
-    }) as Box<dyn Fn(u32, u32) -> u32>);
-
-    let _ = Reflect::set(
-        &wasi_snapshot_preview1,
-        &"environ_sizes_get".into(),
-        environ_sizes_closure.as_ref(),
-    );
-
-    // Add environ_get
-    let environ_get_closure = Closure::wrap(Box::new(move |_: u32, _: u32| -> u32 {
-        0 // Success, no environment variables
-    }) as Box<dyn Fn(u32, u32) -> u32>);
-
-    let _ = Reflect::set(
-        &wasi_snapshot_preview1,
-        &"environ_get".into(),
-        environ_get_closure.as_ref(),
-    );
-
-    let _ = Reflect::set(
-        &imports,
-        &"wasi_snapshot_preview1".into(),
-        &wasi_snapshot_preview1,
-    );
-
-    // Convert bytes to Uint8Array
-    let uint8_array = Uint8Array::new_with_length(wasm_bytes.len() as u32);
-    uint8_array.copy_from(wasm_bytes);
-
-    // Compile and instantiate with timeout
-    let module = WebAssembly::Module::new(&uint8_array.buffer())
-        .map_err(|e| format!("Failed to compile WASM: {:?}", e))?;
-
-    let instance = WebAssembly::Instance::new(&module, &imports)
-        .map_err(|e| format!("Failed to instantiate WASM: {:?}", e))?;
-
-    // Try to call _start or main
-    let exports = instance.exports();
-
-    // Set a timeout for execution (simple fuel limiting)
-    let start_time = js_sys::Date::now();
-
-    if let Ok(start_func) = Reflect::get(&exports, &"_start".into()) {
-        if start_func.is_function() {
-            let func = js_sys::Function::from(start_func);
-            let _ = func
-                .call0(&JsValue::NULL)
-                .map_err(|e| format!("Execution error: {:?}", e))?;
+    // Try to call the add function as a test
+    if let Ok(add_func) = instance.get_typed_func::<(i32, i32), i32>(&store, "add") {
+        match add_func.call(&mut store, (10, 32)) {
+            Ok(result) => {
+                return Ok(format!("Successfully executed! add(10, 32) = {}", result));
+            }
+            Err(e) => {
+                return Err(format!("Failed to call add function: {}", e));
+            }
         }
-    } else if let Ok(main_func) = Reflect::get(&exports, &"main".into()) {
-        if main_func.is_function() {
-            let func = js_sys::Function::from(main_func);
-            let _ = func
-                .call0(&JsValue::NULL)
-                .map_err(|e| format!("Execution error: {:?}", e))?;
+    }
+
+    // Try to call get_greeting function
+    if let Ok(greeting_func) = instance.get_typed_func::<(), i32>(&store, "get_greeting") {
+        match greeting_func.call(&mut store, ()) {
+            Ok(result) => {
+                return Ok(format!("get_greeting() returned: {}", result));
+            }
+            Err(e) => {
+                return Err(format!("Failed to call get_greeting: {}", e));
+            }
         }
-    } else {
-        return Err("No _start or main function found".to_string());
     }
 
-    let elapsed = js_sys::Date::now() - start_time;
-    let timeout_ms = 5000.0; // 5 seconds max
-    if elapsed > timeout_ms {
-        return Err(format!("Execution timeout after {} ms", elapsed));
-    }
-
-    // Keep closures alive
-    fd_write_closure.forget();
-    proc_exit_closure.forget();
-    environ_sizes_closure.forget();
-    environ_get_closure.forget();
-
-    let output = stdout.borrow().clone();
-    if output.is_empty() {
-        Ok("Program executed successfully (no output)".to_string())
-    } else {
-        Ok(output)
-    }
+    Ok("Module loaded successfully (no recognized exports)".to_string())
 }

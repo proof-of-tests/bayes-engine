@@ -21,6 +21,7 @@ web-sys = { version = "0.3", features = ["File", "HtmlInputElement"] }
 rand = { version = "0.9", default-features = false, features = ["small_rng"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+wasmi = "0.51"
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-mutable-globals", "--enable-sign-ext", "--enable-nontrapping-float-to-int"]
