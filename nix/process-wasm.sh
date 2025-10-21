@@ -43,11 +43,12 @@ cp public/style.css assets/style.css
 
 # Copy worker wrapper
 echo "Copying worker wrapper..."
-cp server/worker.js build/worker/shim.mjs
+cp server/worker.js build/worker/worker.js
 
 # Generate content hash for deployment comparison
 echo "Generating content hash..."
-CONTENT_HASH=$(find assets -type f -exec sha256sum {} \; | sort | sha256sum | cut -d' ' -f1)
+# Hash both assets and build folders to represent the complete webapp
+CONTENT_HASH=$(find assets build -type f -exec sha256sum {} \; | sort | sha256sum | cut -d' ' -f1)
 echo "$CONTENT_HASH" > assets/content-hash.txt
 echo "Content hash: $CONTENT_HASH"
 
