@@ -2,75 +2,63 @@
 
 This document provides guidelines and best practices for AI agents (like Claude) working on this project.
 
+## Quick Links
+
+- **[Workflow Guide](agents/WORKFLOW.md)** - Git workflow, branching, committing, and PRs
+- **[Nix Guide](agents/NIX.md)** - Nix commands, builds, and CI integration
+- **[Testing Guide](agents/TESTING.md)** - Unit tests, integration tests, and E2E tests
+- **[Deployment Guide](agents/DEPLOYMENT.md)** - CloudFlare Workers deployment and monitoring
+- **[Tool Usage Cheatsheet](agents/TOOLS.md)** - Claude Code tool best practices
+
 ## Project Structure
 
 ```
 .
-├── LICENSE          # Public domain license
-└── (source files)   # To be added as project develops
+├── agents/           # Agent documentation (you are here)
+├── client/           # Dioxus web UI (WASM)
+├── server/           # CloudFlare Worker (WASM)
+├── e2e_tests/        # End-to-end tests (Selenium)
+├── nix/              # Nix build scripts
+├── .github/          # CI/CD workflows
+├── flake.nix         # Nix flake configuration
+├── wrangler.toml     # CloudFlare Workers config
+├── Cargo.toml        # Rust workspace
+└── LICENSE           # Public domain license
 ```
 
-## Development Workflow
-
-### 1. Create a Feature Branch
-
-**IMPORTANT**: Always create feature branches from the most recent `origin/main`:
+## Quick Start
 
 ```bash
+# Create feature branch
 git fetch origin
-git checkout -b <type>/<brief-description> origin/main
+git checkout -b feat/my-feature origin/main
+
+# Enter development shell
+nix develop
+
+# Make changes, then test
+nix flake check
+nix run .#run-e2e-tests
+
+# Commit and push
+git add .
+git commit -m "feat: add my feature"
+git push -u origin feat/my-feature
+
+# Create PR
+gh pr create --title "feat: add my feature" --body "Brief description"
 ```
 
-Branch types:
+## Development Workflow Summary
 
-- `feat/` - New features
-- `fix/` - Bug fixes
-- `docs/` - Documentation changes
-- `refactor/` - Code refactoring
-- `test/` - Test additions or modifications
-- `chore/` - Maintenance tasks
+See [agents/WORKFLOW.md](agents/WORKFLOW.md) for complete details.
 
-### 2. Make Changes
-
-Follow the code standards and testing guidelines in this document.
-
-### 3. Commit Changes
-
-Use [Conventional Commits](https://www.conventionalcommits.org/) format:
-
-```
-<type>(<scope>): <description>
-
-[optional body]
-
-[optional footer]
-```
-
-**NOTE**: Do not include "Co-Authored-By: Claude" or similar AI attribution in commit messages.
-
-Examples:
-
-```bash
-git commit -m "feat: add Bayesian inference engine"
-git commit -m "fix(parser): handle edge case in probability parsing"
-git commit -m "docs: update README with installation instructions"
-```
-
-### 4. Push and Create PR
-
-```bash
-git push -u origin <branch-name>
-gh pr create --title "Title" --body "Description"
-```
-
-**NOTE**: PR descriptions should be short and concise. Do not include a "Test Plan" section - PRs are automatically
-tested in CI and do not need manual testing instructions beyond that.
-
-**NOTE**: Do not include "Generated with Claude Code" or similar AI attribution in PR descriptions.
-
-### 5. Review and Merge
-
-Address review comments, then merge when approved.
+1. **Create branch** from `origin/main` with type prefix (feat/, fix/, etc.)
+2. **Make changes** following code standards
+3. **Test locally** with `nix flake check` and `nix run .#run-e2e-tests`
+4. **Commit** using Conventional Commits format
+5. **Push and create PR** with concise description
+6. **Review and merge** after CI passes
 
 ## Code Standards
 
@@ -96,11 +84,26 @@ Address review comments, then merge when approved.
 
 ## Testing
 
+See [agents/TESTING.md](agents/TESTING.md) for complete details.
+
+### Quick Reference
+
+```bash
+# Run all checks (formatting, linting, tests, build)
+nix flake check
+
+# Run end-to-end tests
+nix run .#run-e2e-tests
+
+# Run Rust unit tests only
+cargo test
+```
+
 ### Test Types
 
 1. **Unit Tests**: Test individual functions/methods in isolation
 2. **Integration Tests**: Test how components work together
-3. **End-to-End Tests**: Test complete workflows
+3. **End-to-End Tests**: Test complete workflows through browser
 
 ### Testing Best Practices
 
@@ -110,71 +113,51 @@ Address review comments, then merge when approved.
 - Keep tests independent and isolated
 - Mock external dependencies
 
-## Common Commands
+## Nix & Build System
 
-### Git Operations
+See [agents/NIX.md](agents/NIX.md) for complete details.
 
-```bash
-# Check status
-git status
-
-# View changes
-git diff
-
-# View commit history
-git log --oneline --graph
-
-# Create and switch to new branch
-git checkout -b <branch-name>
-
-# Push branch to remote
-git push -u origin <branch-name>
-
-# Update from main
-git fetch origin
-git rebase origin/main
-```
-
-### GitHub CLI
+### Quick Reference
 
 ```bash
-# Create PR
-gh pr create
+# Enter development shell
+nix develop
 
-# View PR status
-gh pr status
+# Build webapp (client + server WASM)
+nix build .#webapp
 
-# List PRs
-gh pr list
+# Run locally
+nix run .#wrangler-dev
 
-# View PR in browser
-gh pr view --web
+# Run all checks
+nix flake check
 
-# Check CI status
-gh pr checks
+# Format Nix files
+nix fmt
 ```
 
-## Implementation Patterns
+## Deployment
 
-### Testing Pattern
+See [agents/DEPLOYMENT.md](agents/DEPLOYMENT.md) for complete details.
 
-Structure tests clearly:
-
-```
-# Arrange: Set up test data
-# Act: Execute the code being tested
-# Assert: Verify the results
-```
+- **Production**: Deployed automatically on push to `main`
+- **PR Previews**: Each PR gets a unique preview URL
+- **Platform**: CloudFlare Workers (edge serverless)
+- **Monitoring**: CloudFlare dashboard + `wrangler tail`
 
 ## Experience Log
 
 Document learnings, decisions, and insights here as the project evolves.
 
-### [YYYY-MM-DD] Initial Setup
+### [2025-10-21] High-Level Documentation Structure
 
-- Created project structure
-- Established development workflow
-- Set up documentation for AI agents
+- Created dedicated documentation guides:
+  - agents/WORKFLOW.md - Development workflow
+  - agents/NIX.md - Nix commands and builds
+  - agents/TESTING.md - Testing at all levels
+  - agents/DEPLOYMENT.md - CloudFlare deployment
+  - agents/TOOLS.md - Claude Code tool usage
+- Updated AGENTS.md to serve as navigation hub
 
 ______________________________________________________________________
 
@@ -182,8 +165,10 @@ ______________________________________________________________________
 
 - **Read before writing**: Always read existing files before modifying them
 - **Follow conventions**: Match the style and patterns already in the codebase
-- **Test your changes**: Run tests after making changes
+- **Test your changes**: Run `nix flake check` and `nix run .#run-e2e-tests` after making changes
 - **Small commits**: Make focused commits with clear messages
 - **Ask when unclear**: Use the AskUserQuestion tool if requirements are ambiguous
 - **Document as you go**: Update docs when adding features
 - **Use todo lists**: Track multi-step tasks with the TodoWrite tool
+- **Check the guides**: Refer to agents/\*.md for detailed workflows and best practices
+- **Use right tools**: See [agents/TOOLS.md](agents/TOOLS.md) for Claude Code tool usage guidelines
