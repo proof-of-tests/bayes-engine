@@ -4,11 +4,11 @@ This document provides guidelines and best practices for AI agents (like Claude)
 
 ## Quick Links
 
-- **[Workflow Guide](agents/WORKFLOW.md)** - Git workflow, branching, committing, and PRs
-- **[Nix Guide](agents/NIX.md)** - Nix commands, builds, and CI integration
-- **[Testing Guide](agents/TESTING.md)** - Unit tests, integration tests, and E2E tests
-- **[Deployment Guide](agents/DEPLOYMENT.md)** - CloudFlare Workers deployment and monitoring
-- **[Tool Usage Cheatsheet](agents/TOOLS.md)** - Claude Code tool best practices
+- **@agents/WORKFLOW.md** - Git workflow, branching, committing, and PRs
+- **@agents/NIX.md** - Nix commands, builds, and CI integration
+- **@agents/TESTING.md** - Unit tests, integration tests, and E2E tests
+- **@agents/DEPLOYMENT.md** - CloudFlare Workers deployment and monitoring
+- **@agents/TOOLS.md** - Claude Code tool best practices
 
 ## Project Structure
 
@@ -51,7 +51,7 @@ gh pr create --title "feat: add my feature" --body "Brief description"
 
 ## Development Workflow Summary
 
-See [agents/WORKFLOW.md](agents/WORKFLOW.md) for complete details.
+See @agents/WORKFLOW.md for complete details.
 
 1. **Create branch** from `origin/main` with type prefix (feat/, fix/, etc.)
 2. **Make changes** following code standards
@@ -84,7 +84,7 @@ See [agents/WORKFLOW.md](agents/WORKFLOW.md) for complete details.
 
 ## Testing
 
-See [agents/TESTING.md](agents/TESTING.md) for complete details.
+See @agents/TESTING.md for complete details.
 
 ### Quick Reference
 
@@ -115,7 +115,7 @@ cargo test
 
 ## Nix & Build System
 
-See [agents/NIX.md](agents/NIX.md) for complete details.
+See @agents/NIX.md for complete details.
 
 ### Quick Reference
 
@@ -138,7 +138,7 @@ nix fmt
 
 ## Deployment
 
-See [agents/DEPLOYMENT.md](agents/DEPLOYMENT.md) for complete details.
+See @agents/DEPLOYMENT.md for complete details.
 
 - **Production**: Deployed automatically on push to `main`
 - **PR Previews**: Each PR gets a unique preview URL
@@ -171,4 +171,4 @@ ______________________________________________________________________
 - **Document as you go**: Update docs when adding features
 - **Use todo lists**: Track multi-step tasks with the TodoWrite tool
 - **Check the guides**: Refer to agents/\*.md for detailed workflows and best practices
-- **Use right tools**: See [agents/TOOLS.md](agents/TOOLS.md) for Claude Code tool usage guidelines
+- **Use right tools**: See @agents/TOOLS.md for Claude Code tool usage guidelines
