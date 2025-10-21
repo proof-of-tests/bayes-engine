@@ -215,6 +215,60 @@
               exec ${pkgs.bash}/bin/bash ${./nix/report-sizes.sh} ${webapp}
             ''}";
           };
+
+          # Run end-to-end tests
+          run-e2e-tests = {
+            type = "app";
+            program = "${pkgs.writeShellScript "run-e2e-tests" ''
+              set -e
+
+              # Build e2e_tests binary
+              echo "Building e2e_tests..."
+              ${rustToolchain}/bin/cargo build --package e2e_tests
+
+              # Ensure webapp is built (creates result/ directory)
+              echo "Ensuring webapp is built..."
+              ${pkgs.nix}/bin/nix build .#webapp --no-link || true
+
+              # Start wrangler dev with e2e environment in background
+              echo "Starting wrangler dev with e2e environment..."
+              WRANGLER_PORT=''${WRANGLER_PORT:-8787}
+              ${wrangler.packages.${system}.default}/bin/wrangler dev --env e2e --port $WRANGLER_PORT &
+              WRANGLER_PID=$!
+
+              # Wait for wrangler to start (up to 30 seconds)
+              echo "Waiting for wrangler to start on port $WRANGLER_PORT..."
+              for i in {1..30}; do
+                if ${pkgs.curl}/bin/curl -sf http://localhost:$WRANGLER_PORT > /dev/null 2>&1; then
+                  echo "Wrangler is ready!"
+                  break
+                fi
+                if [ $i -eq 30 ]; then
+                  echo "Wrangler failed to start within 30 seconds"
+                  kill $WRANGLER_PID 2>/dev/null || true
+                  exit 1
+                fi
+                sleep 1
+              done
+
+              # Run e2e tests
+              echo "Running e2e tests..."
+              export WRANGLER_PORT
+              export WEBDRIVER_PORT=''${WEBDRIVER_PORT:-4444}
+              export E2E_BROWSER=''${E2E_BROWSER:-safari}
+
+              # Run tests and capture exit code
+              target/debug/e2e_tests
+              TEST_EXIT_CODE=$?
+
+              # Cleanup: kill wrangler
+              echo "Cleaning up..."
+              kill $WRANGLER_PID 2>/dev/null || true
+
+              # Exit with test exit code
+              exit $TEST_EXIT_CODE
+            ''}";
+          };
         };
 
         # Add a formatter for convenience
