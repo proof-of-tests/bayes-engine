@@ -229,16 +229,34 @@
             type = "app";
             program = "${pkgs.writeShellScript "run-e2e-tests" ''
               set -e
+              export PATH="${pkgs.lib.makeBinPath [ pkgs.util-linux pkgs.procps pkgs.coreutils ]}:$PATH"
 
               # Create result symlink to webapp (dependency ensures webapp is built)
               echo "Creating result symlink to webapp..."
               ln -sfn ${webapp} result
 
-              # Start wrangler dev with e2e environment in background
+              # Setup cleanup trap to kill wrangler process group on exit
+              cleanup() {
+                if [ -n "''${WRANGLER_PGID:-}" ]; then
+                  echo "Cleaning up wrangler and all child processes..."
+                  # Try SIGTERM first
+                  kill -TERM -"$WRANGLER_PGID" 2>/dev/null || true
+                  sleep 2
+                  # Then SIGKILL if still running
+                  kill -KILL -"$WRANGLER_PGID" 2>/dev/null || true
+                fi
+              }
+              trap cleanup EXIT
+
+              # Start wrangler dev with e2e environment in a new session
               echo "Starting wrangler dev with e2e environment..."
               WRANGLER_PORT=''${WRANGLER_PORT:-8787}
-              ${wrangler.packages.${system}.default}/bin/wrangler dev --env e2e --port $WRANGLER_PORT &
+              setsid ${wrangler.packages.${system}.default}/bin/wrangler dev --env e2e --port $WRANGLER_PORT > wrangler.log 2>&1 &
               WRANGLER_PID=$!
+
+              # Get the process group ID
+              WRANGLER_PGID=$(ps -o pgid= -p "$WRANGLER_PID" | tr -d ' ')
+              echo "Wrangler started with PID $WRANGLER_PID in process group $WRANGLER_PGID"
 
               # Wait for wrangler to start (up to 30 seconds)
               echo "Waiting for wrangler to start on port $WRANGLER_PORT..."
@@ -249,7 +267,8 @@
                 fi
                 if [ $i -eq 30 ]; then
                   echo "Wrangler failed to start within 30 seconds"
-                  kill $WRANGLER_PID 2>/dev/null || true
+                  echo "Last 20 lines of wrangler.log:"
+                  tail -20 wrangler.log || true
                   exit 1
                 fi
                 sleep 1
@@ -265,11 +284,7 @@
               ${e2eTests}/bin/e2e_tests
               TEST_EXIT_CODE=$?
 
-              # Cleanup: kill wrangler
-              echo "Cleaning up..."
-              kill $WRANGLER_PID 2>/dev/null || true
-
-              # Exit with test exit code
+              # Exit with test exit code (cleanup trap will run automatically)
               exit $TEST_EXIT_CODE
             ''}";
           };
