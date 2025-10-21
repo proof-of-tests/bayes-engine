@@ -5,7 +5,10 @@ use wasm_bindgen::prelude::*;
 
 mod hyperloglog;
 mod hyperloglog_demo;
+mod wasm_executor;
+
 use hyperloglog_demo::HyperLogLogDemo;
+use wasm_executor::WasmExecutor;
 
 #[derive(Serialize)]
 struct UppercaseRequest {
@@ -37,6 +40,8 @@ fn App() -> Element {
         div { class: "container",
             h1 { "Hello World!" }
             p { "This is a Dioxus WASM app running on CloudFlare Workers" }
+
+            WasmExecutor {}
 
             HyperLogLogDemo {}
 
