@@ -72,6 +72,14 @@
           doCheck = false;
         });
 
+        # Build e2e_tests binary separately (native-only, for testing)
+        e2eTests = craneLib.buildPackage (commonArgs // {
+          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+          pname = "e2e_tests";
+          cargoExtraArgs = "--package e2e_tests";
+          doCheck = false;
+        });
+
         # Common arguments for wasm builds
         commonArgsWasm = {
           inherit src;
@@ -194,7 +202,7 @@
         packages = {
           default = cargoBuild;
           bayes-engine = cargoBuild;
-          inherit webapp wasmBuild;
+          inherit webapp wasmBuild e2eTests;
         };
 
         apps = {
@@ -221,10 +229,6 @@
             type = "app";
             program = "${pkgs.writeShellScript "run-e2e-tests" ''
               set -e
-
-              # Build e2e_tests binary
-              echo "Building e2e_tests..."
-              ${rustToolchain}/bin/cargo build --package e2e_tests
 
               # Create result symlink to webapp (dependency ensures webapp is built)
               echo "Creating result symlink to webapp..."
@@ -258,7 +262,7 @@
               export E2E_BROWSER=''${E2E_BROWSER:-safari}
 
               # Run tests and capture exit code
-              target/debug/e2e_tests
+              ${e2eTests}/bin/e2e_tests
               TEST_EXIT_CODE=$?
 
               # Cleanup: kill wrangler
