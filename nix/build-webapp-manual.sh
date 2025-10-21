@@ -34,7 +34,7 @@ mkdir -p build/worker
 wasm-bindgen \
   target/wasm32-unknown-unknown/release/server.wasm \
   --out-dir build/worker \
-  --target bundler \
+  --target web \
   --no-typescript
 
 # Copy the JavaScript worker wrapper
