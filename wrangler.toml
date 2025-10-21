@@ -10,13 +10,13 @@ command = "nix build .#webapp"
 [assets]
 directory = "result/assets"
 
-# KV namespace for storing messages
-# Note: Using KV as a temporary workaround for WASM compatibility
-# Long-term solution should use Postgres via Hyperdrive or D1
-[[kv_namespaces]]
-binding = "MESSAGES"
-id = "placeholder_id"
-preview_id = "placeholder_preview_id"
+# Hyperdrive database binding for Postgres connectivity
+# To set up:
+# 1. Create Hyperdrive configuration: wrangler hyperdrive create bayes-db --connection-string="<your-postgres-connection-string>"
+# 2. Update the 'id' below with the Hyperdrive ID from step 1
+[[hyperdrive]]
+binding = "DB"
+id = "your-hyperdrive-id-here"
 
 # E2E testing environment - uses pre-compiled files without running build
 [env.e2e]

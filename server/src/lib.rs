@@ -26,6 +26,38 @@ struct MessagesResponse {
     messages: Vec<Message>,
 }
 
+/// Establishes a connection to the Postgres database via Hyperdrive
+async fn connect_to_db(env: &Env) -> Result<tokio_postgres::Client> {
+    // Get Hyperdrive configuration
+    let hyperdrive = env.hyperdrive("DB")?;
+
+    // Establish socket connection with TLS
+    let socket = Socket::builder()
+        .secure_transport(SecureTransport::StartTls)
+        .connect(hyperdrive.host(), hyperdrive.port())?;
+
+    // Parse connection configuration
+    let config = hyperdrive
+        .connection_string()
+        .parse::<tokio_postgres::Config>()
+        .map_err(|e| Error::RustError(format!("Failed to parse connection string: {}", e)))?;
+
+    // Connect using raw socket with NoTls (TLS is handled by the socket layer)
+    let (client, connection) = config
+        .connect_raw(socket, tokio_postgres::NoTls)
+        .await
+        .map_err(|e| Error::RustError(format!("Failed to connect to database: {}", e)))?;
+
+    // Handle connection lifecycle asynchronously
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Err(error) = connection.await {
+            console_log!("Database connection error: {:?}", error);
+        }
+    });
+
+    Ok(client)
+}
+
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: worker::Context) -> Result<Response> {
     console_error_panic_hook::set_once();
@@ -50,36 +82,33 @@ async fn fetch(req: Request, env: Env, _ctx: worker::Context) -> Result<Response
         .get_async("/api/messages", |_req, ctx| async move {
             let env = ctx.env;
 
-            // TODO: Replace with actual Hyperdrive/Postgres connection
-            // For now, using KV storage as a workaround for WASM compatibility
-            // The proper solution requires either:
-            // 1. Using CloudFlare D1 (native SQLite)
-            // 2. HTTP bridge to Postgres
-            // 3. JavaScript interop with Hyperdrive
-            let messages = match env.kv("MESSAGES") {
-                Ok(kv) => {
-                    // Try to get messages from KV
-                    match kv.list().execute().await {
-                        Ok(keys) => {
-                            let mut msgs = Vec::new();
-                            for key in keys.keys {
-                                if let Ok(Some(value)) = kv.get(&key.name).text().await {
-                                    msgs.push(Message { message: value });
-                                }
-                            }
-                            msgs
-                        }
-                        Err(_) => Vec::new(),
-                    }
-                }
-                Err(_) => {
-                    // KV not available, return empty list
-                    Vec::new()
+            // Connect to Postgres via Hyperdrive
+            let client = match connect_to_db(&env).await {
+                Ok(client) => client,
+                Err(e) => {
+                    return Response::error(format!("Failed to connect to database: {}", e), 500);
                 }
             };
 
-            let response = MessagesResponse { messages };
-            Response::from_json(&response)
+            // Query all messages from the database
+            match client
+                .query("SELECT message FROM messages ORDER BY message", &[])
+                .await
+            {
+                Ok(rows) => {
+                    let messages: Vec<Message> = rows
+                        .iter()
+                        .map(|row| {
+                            let message: String = row.get(0);
+                            Message { message }
+                        })
+                        .collect();
+
+                    let response = MessagesResponse { messages };
+                    Response::from_json(&response)
+                }
+                Err(e) => Response::error(format!("Failed to query messages: {}", e), 500),
+            }
         })
         .post_async("/api/messages", |mut req, ctx| async move {
             let env = ctx.env;
@@ -92,28 +121,29 @@ async fn fetch(req: Request, env: Env, _ctx: worker::Context) -> Result<Response
                 }
             };
 
-            // TODO: Replace with actual Hyperdrive/Postgres INSERT
-            // For now, using KV storage as a workaround
-            match env.kv("MESSAGES") {
-                Ok(kv) => {
-                    // Use timestamp as key for uniqueness
-                    let key = format!("msg_{}", Date::now().as_millis());
-                    match kv.put(&key, &body.message) {
-                        Ok(builder) => match builder.execute().await {
-                            Ok(_) => {
-                                let response = Message {
-                                    message: body.message,
-                                };
-                                Response::from_json(&response)
-                            }
-                            Err(e) => {
-                                Response::error(format!("Failed to store message: {}", e), 500)
-                            }
-                        },
-                        Err(e) => Response::error(format!("Failed to create put: {}", e), 500),
-                    }
+            // Connect to Postgres via Hyperdrive
+            let client = match connect_to_db(&env).await {
+                Ok(client) => client,
+                Err(e) => {
+                    return Response::error(format!("Failed to connect to database: {}", e), 500);
                 }
-                Err(_) => Response::error("KV storage not configured", 500),
+            };
+
+            // Insert message into the database
+            match client
+                .execute(
+                    "INSERT INTO messages (message) VALUES ($1)",
+                    &[&body.message],
+                )
+                .await
+            {
+                Ok(_) => {
+                    let response = Message {
+                        message: body.message,
+                    };
+                    Response::from_json(&response)
+                }
+                Err(e) => Response::error(format!("Failed to insert message: {}", e), 500),
             }
         })
         .run(req, env)
