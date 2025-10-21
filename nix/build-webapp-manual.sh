@@ -3,7 +3,7 @@ set -euo pipefail
 
 echo "=== Building webapp with client WASM and server Worker (manual build) ==="
 
-# Setup environment for wasm-pack and cargo
+# Setup environment for cargo
 export HOME=$TMPDIR
 mkdir -p "$HOME/.cache"
 
@@ -14,8 +14,27 @@ unset CARGO_BUILD_TARGET
 echo "Building client WASM..."
 mkdir -p assets/pkg
 cd client
-wasm-pack build --release --target web --out-dir ../assets/pkg --no-typescript --mode no-install
+cargo build --release --target wasm32-unknown-unknown --package client
 cd ..
+
+# Run wasm-bindgen on the client WASM
+echo "Running wasm-bindgen on client..."
+wasm-bindgen \
+  target/wasm32-unknown-unknown/release/client.wasm \
+  --out-dir assets/pkg \
+  --target web \
+  --no-typescript
+
+# Optimize client WASM with wasm-opt
+echo "Optimizing client WASM..."
+wasm-opt \
+  assets/pkg/client_bg.wasm \
+  -o assets/pkg/client_bg.wasm \
+  -Oz \
+  --enable-bulk-memory \
+  --enable-mutable-globals \
+  --enable-sign-ext \
+  --enable-nontrapping-float-to-int
 
 # Copy static HTML and CSS to assets
 echo "Copying static assets..."
