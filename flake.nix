@@ -73,6 +73,7 @@
         commonArgsWasm = {
           inherit src;
           strictDeps = true;
+          CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
         };
 
         # Step 1: Build WASM files (client and server) with cached dependencies
@@ -85,7 +86,7 @@
           # Can't run wasm tests natively
           doCheck = false;
 
-          buildPhaseCargoCommand = "cargo build --release --target wasm32-unknown-unknown";
+          CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
 
           installPhaseCommand = ''
             mkdir -p $out
@@ -188,7 +189,7 @@
         packages = {
           default = cargoBuild;
           bayes-engine = cargoBuild;
-          inherit webapp;
+          inherit webapp wasmBuild;
         };
 
         apps = {
