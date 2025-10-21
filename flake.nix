@@ -45,13 +45,14 @@
         # Create craneLib for wasm builds
         craneLibWasm = (crane.mkLib pkgs).overrideToolchain rustToolchainWasm;
 
-        # Common source filtering - include static and public directories for CSS and other assets
+        # Common source filtering - include static, public, and JS files for assets and worker code
         src = pkgs.lib.cleanSourceWith {
           src = ./.;
           filter = path: type:
             (craneLib.filterCargoSources path type) ||
             (builtins.match ".*/static/.*" path != null) ||
-            (builtins.match ".*/public/.*" path != null);
+            (builtins.match ".*/public/.*" path != null) ||
+            (builtins.match ".*\\.js$" path != null);
         };
 
         # Common arguments for all Crane builds
@@ -73,16 +74,14 @@
           inherit src;
           strictDeps = true;
           nativeBuildInputs = [
-            pkgs.worker-build
             pkgs.wasm-bindgen-cli
             pkgs.wasm-pack
             pkgs.binaryen
-            esbuild_0_25_10
             pkgs.nodejs_22
           ];
         };
 
-        # Build the webapp with worker-build
+        # Build the webapp with manual WASM compilation
         webapp = craneLibWasm.buildPackage (commonArgsWasm // {
           cargoArtifacts = craneLibWasm.buildDepsOnly commonArgsWasm;
 
@@ -92,13 +91,13 @@
           # Can't run wasm tests natively
           doCheck = false;
 
-          # Make source writable since worker-build creates a build directory
+          # Make source writable since we create a build directory
           postUnpack = ''
             chmod -R +w $sourceRoot
           '';
 
           buildPhase = ''
-            ${pkgs.bash}/bin/bash ${./nix/build-webapp.sh}
+            ${pkgs.bash}/bin/bash ${./nix/build-webapp-manual.sh}
           '';
 
           installPhaseCommand = ''
