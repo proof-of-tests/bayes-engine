@@ -9,6 +9,7 @@ crate-type = ["cdylib"]
 [dependencies]
 dioxus = { workspace = true }
 dioxus-web = "0.6"
+dioxus-router = "0.6"
 wasm-bindgen = { workspace = true }
 console_error_panic_hook = "0.1"
 gloo-net = "0.6"
