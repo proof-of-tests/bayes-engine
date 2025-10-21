@@ -25,6 +25,7 @@
         pkgs = import nixpkgs {
           inherit system;
           overlays = [ rust-overlay.overlays.default ];
+          config.allowUnfree = true;
         };
 
         # Load Rust toolchain from rust-toolchain.toml
@@ -229,34 +230,60 @@
             type = "app";
             program = "${pkgs.writeShellScript "run-e2e-tests" ''
               set -e
-              export PATH="${pkgs.lib.makeBinPath [ pkgs.util-linux pkgs.procps pkgs.coreutils ]}:$PATH"
+              export PATH="${pkgs.lib.makeBinPath [ pkgs.util-linux pkgs.procps pkgs.coreutils pkgs.geckodriver ]}:$PATH"
 
               # Create result symlink to webapp (dependency ensures webapp is built)
               echo "Creating result symlink to webapp..."
               ln -sfn ${webapp} result
 
-              # Setup cleanup trap to kill wrangler process group on exit
+              # Setup cleanup trap to kill wrangler and geckodriver on exit
               cleanup() {
-                if [ -n "''${WRANGLER_PGID:-}" ]; then
-                  echo "Cleaning up wrangler and all child processes..."
-                  # Try SIGTERM first
-                  kill -TERM -"$WRANGLER_PGID" 2>/dev/null || true
-                  sleep 2
-                  # Then SIGKILL if still running
-                  kill -KILL -"$WRANGLER_PGID" 2>/dev/null || true
+                if [ -n "''${WRANGLER_PID:-}" ]; then
+                  echo "Stopping wrangler and its child processes..."
+                  # Kill all children of wrangler first
+                  pkill -P "$WRANGLER_PID" 2>/dev/null || true
+                  # Then kill wrangler itself
+                  kill "$WRANGLER_PID" 2>/dev/null || true
+                  # Wait a moment then force kill if still running
+                  sleep 1
+                  kill -9 "$WRANGLER_PID" 2>/dev/null || true
+                fi
+                if [ -n "''${GECKODRIVER_PID:-}" ]; then
+                  echo "Stopping geckodriver..."
+                  kill "$GECKODRIVER_PID" 2>/dev/null || true
                 fi
               }
               trap cleanup EXIT
 
-              # Start wrangler dev with e2e environment in a new session
+              # Start geckodriver in the background
+              echo "Starting geckodriver..."
+              WEBDRIVER_PORT=''${WEBDRIVER_PORT:-4444}
+              geckodriver --port=$WEBDRIVER_PORT > geckodriver.log 2>&1 &
+              GECKODRIVER_PID=$!
+              echo "Geckodriver started with PID $GECKODRIVER_PID on port $WEBDRIVER_PORT"
+
+              # Wait for geckodriver to start (up to 10 seconds)
+              echo "Waiting for geckodriver to be ready..."
+              for i in {1..10}; do
+                if ${pkgs.curl}/bin/curl -sf http://localhost:$WEBDRIVER_PORT/status > /dev/null 2>&1; then
+                  echo "Geckodriver is ready!"
+                  break
+                fi
+                if [ $i -eq 10 ]; then
+                  echo "Geckodriver failed to start within 10 seconds"
+                  echo "Last 20 lines of geckodriver.log:"
+                  tail -20 geckodriver.log || true
+                  exit 1
+                fi
+                sleep 1
+              done
+
+              # Start wrangler dev with e2e environment
               echo "Starting wrangler dev with e2e environment..."
               WRANGLER_PORT=''${WRANGLER_PORT:-8787}
-              setsid ${wrangler.packages.${system}.default}/bin/wrangler dev --env e2e --port $WRANGLER_PORT > wrangler.log 2>&1 &
+              ${wrangler.packages.${system}.default}/bin/wrangler dev --env e2e --port $WRANGLER_PORT > wrangler.log 2>&1 &
               WRANGLER_PID=$!
-
-              # Get the process group ID
-              WRANGLER_PGID=$(ps -o pgid= -p "$WRANGLER_PID" | tr -d ' ')
-              echo "Wrangler started with PID $WRANGLER_PID in process group $WRANGLER_PGID"
+              echo "Wrangler started with PID $WRANGLER_PID"
 
               # Wait for wrangler to start (up to 30 seconds)
               echo "Waiting for wrangler to start on port $WRANGLER_PORT..."
@@ -274,11 +301,11 @@
                 sleep 1
               done
 
-              # Run e2e tests
-              echo "Running e2e tests..."
+              # Run e2e tests with headless Firefox
+              echo "Running e2e tests with headless Firefox..."
               export WRANGLER_PORT
-              export WEBDRIVER_PORT=''${WEBDRIVER_PORT:-4444}
-              export E2E_BROWSER=''${E2E_BROWSER:-safari}
+              export WEBDRIVER_PORT
+              export E2E_BROWSER=''${E2E_BROWSER:-firefox}
 
               # Run tests and capture exit code
               ${e2eTests}/bin/e2e_tests

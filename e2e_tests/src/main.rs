@@ -25,9 +25,22 @@ async fn main() -> Result<()> {
             caps.set_headless()?;
             WebDriver::new(&webdriver_url, caps).await?
         }
+        "chrome" => {
+            let mut caps = DesiredCapabilities::chrome();
+            caps.set_headless()?;
+            // Disable GPU for headless Chrome (avoids some rendering issues)
+            caps.add_arg("--disable-gpu")?;
+            // Run in no-sandbox mode (required for some CI environments)
+            caps.add_arg("--no-sandbox")?;
+            // Set Chrome binary path (required when using Nix-installed Chrome)
+            if let Ok(chrome_path) = std::env::var("CHROME_PATH") {
+                caps.set_binary(&chrome_path)?;
+            }
+            WebDriver::new(&webdriver_url, caps).await?
+        }
         _ => {
             anyhow::bail!(
-                "Unsupported browser: {}. Use 'safari' or 'firefox'",
+                "Unsupported browser: {}. Use 'safari', 'firefox', or 'chrome'",
                 browser
             );
         }
