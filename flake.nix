@@ -226,9 +226,9 @@
               echo "Building e2e_tests..."
               ${rustToolchain}/bin/cargo build --package e2e_tests
 
-              # Ensure webapp is built (creates result/ directory)
-              echo "Ensuring webapp is built..."
-              ${pkgs.nix}/bin/nix build .#webapp --no-link || true
+              # Create result symlink to webapp (dependency ensures webapp is built)
+              echo "Creating result symlink to webapp..."
+              ln -sfn ${webapp} result
 
               # Start wrangler dev with e2e environment in background
               echo "Starting wrangler dev with e2e environment..."
