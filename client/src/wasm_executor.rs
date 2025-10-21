@@ -210,8 +210,8 @@ async fn execute_wasm_module(wasm_bytes: &[u8]) -> Result<String, String> {
     let mut store = Store::new(&engine, ());
 
     // Parse the WASM module
-    let module = Module::new(&engine, wasm_bytes)
-        .map_err(|e| format!("Failed to parse module: {}", e))?;
+    let module =
+        Module::new(&engine, wasm_bytes).map_err(|e| format!("Failed to parse module: {}", e))?;
 
     // Create a linker (for imports)
     let linker = Linker::new(&engine);
