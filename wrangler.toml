@@ -10,6 +10,11 @@ command = "nix build .#webapp"
 [assets]
 directory = "result/assets"
 
+# Hyperdrive database binding for Postgres connectivity
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "a88d53af1e344d80bdd1ab8f88692b14"
+
 # E2E testing environment - uses pre-compiled files without running build
 [env.e2e]
 # No build command - assumes result/ directory already exists with compiled files

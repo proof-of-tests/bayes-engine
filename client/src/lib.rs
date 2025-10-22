@@ -6,9 +6,11 @@ use wasm_bindgen::prelude::*;
 
 mod hyperloglog;
 mod hyperloglog_demo;
+mod messages_demo;
 mod wasm_executor;
 
 use hyperloglog_demo::HyperLogLogDemo;
+use messages_demo::MessagesDemo;
 use wasm_executor::WasmExecutor;
 
 #[derive(Serialize)]
@@ -19,6 +21,21 @@ struct UppercaseRequest {
 #[derive(Deserialize)]
 struct UppercaseResponse {
     result: String,
+}
+
+#[derive(Serialize)]
+pub struct MessageRequest {
+    pub message: String,
+}
+
+#[derive(Deserialize, Clone, PartialEq)]
+pub struct Message {
+    pub message: String,
+}
+
+#[derive(Deserialize)]
+pub struct MessagesResponse {
+    pub messages: Vec<Message>,
 }
 
 #[derive(Clone, Routable, Debug, PartialEq)]
@@ -151,6 +168,10 @@ fn Tests() -> Element {
                             p { class: "result-text", "{uppercase_result}" }
                         }
                     }
+                }
+
+                div { class: "test-box",
+                    MessagesDemo {}
                 }
             }
 
