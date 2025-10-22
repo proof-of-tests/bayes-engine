@@ -37,7 +37,9 @@ provision:
         ca-certificates \
         libicu74 \
         nodejs \
-        npm
+        npm \
+        firefox \
+        firefox-geckodriver
 
       # Install Nix (required for building the project)
       if ! command -v nix &> /dev/null; then
