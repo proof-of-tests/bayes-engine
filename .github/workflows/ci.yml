@@ -7,22 +7,24 @@ on:
     branches: [main]
 
 jobs:
-  check-runners:
-    name: Check Runner Availability
+  determine-runner:
+    name: Determine Runner
     runs-on: ubuntu-latest
     outputs:
-      self-hosted-available: ${{ steps.check.outputs.available }}
+      runner: ${{ steps.set-runner.outputs.use-runner }}
     steps:
-      - name: Check if self-hosted runners are available
-        id: check
-        uses: cloudposse/github-action-runner-available@v1
+      - name: Determine which runner to use
+        id: set-runner
+        uses: jimmygchen/runner-fallback-action@v1
         with:
-          runner-labels: self-hosted,Linux,ARM64
+          primary-runner: "self-hosted,Linux,ARM64"
+          fallback-runner: "ubuntu-24.04-arm"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
   nix-checks:
     name: Nix Flake Checks
-    needs: check-runners
-    runs-on: ${{ needs.check-runners.outputs.self-hosted-available == 'true' && fromJSON('["self-hosted", "Linux", "ARM64"]') || 'ubuntu-24.04-arm' }}
+    needs: determine-runner
+    runs-on: ${{ fromJson(needs.determine-runner.outputs.runner) }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -39,8 +41,8 @@ jobs:
 
   e2e-tests:
     name: End-to-End Tests
-    needs: [check-runners, nix-checks]
-    runs-on: ${{ needs.check-runners.outputs.self-hosted-available == 'true' && fromJSON('["self-hosted", "Linux", "ARM64"]') || 'ubuntu-24.04-arm' }}
+    needs: [determine-runner, nix-checks]
+    runs-on: ${{ fromJson(needs.determine-runner.outputs.runner) }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
