@@ -62,8 +62,8 @@
         commonArgs = {
           inherit src;
           strictDeps = true;
-          # Exclude e2e_tests from the main build
-          cargoExtraArgs = "--workspace --exclude e2e_tests";
+          # Exclude e2e_tests and simple-component from the main build
+          cargoExtraArgs = "--workspace --exclude e2e_tests --exclude simple-wasm-module";
         };
 
         # Build the workspace
@@ -81,13 +81,38 @@
           doCheck = false;
         });
 
+        # Build simple-wasm-module separately for e2e testing
+        simpleWasmModule = craneLibWasm.buildPackage {
+          inherit src;
+          strictDeps = true;
+          pname = "simple-wasm-module";
+          CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
+          cargoExtraArgs = "--package simple-wasm-module";
+
+          # Build only dependencies first
+          cargoArtifacts = craneLibWasm.buildDepsOnly {
+            inherit src;
+            strictDeps = true;
+            CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
+            cargoExtraArgs = "--package simple-wasm-module";
+          };
+
+          doCheck = false;
+          doNotPostBuildInstallCargoBinaries = true;
+
+          installPhaseCommand = ''
+            mkdir -p $out
+            cp target/wasm32-unknown-unknown/release/simple_wasm_module.wasm $out/
+          '';
+        };
+
         # Common arguments for wasm builds
         commonArgsWasm = {
           inherit src;
           strictDeps = true;
           CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
-          # Exclude e2e_tests from WASM builds (it's native-only)
-          cargoExtraArgs = "--workspace --exclude e2e_tests";
+          # Exclude e2e_tests and simple-component from WASM builds (we build simple-component separately)
+          cargoExtraArgs = "--workspace --exclude e2e_tests --exclude simple-wasm-module";
         };
 
         # Step 1: Build WASM files (client and server) with cached dependencies
@@ -203,7 +228,7 @@
         packages = {
           default = cargoBuild;
           bayes-engine = cargoBuild;
-          inherit webapp wasmBuild e2eTests;
+          inherit webapp wasmBuild e2eTests simpleWasmModule;
         };
 
         apps = {
@@ -234,6 +259,7 @@
               export CURL_BIN="${pkgs.curl}/bin/curl"
               export WRANGLER_BIN="${wrangler.packages.${system}.default}/bin/wrangler"
               export E2E_TESTS_BIN="${e2eTests}/bin/e2e_tests"
+              export SIMPLE_WASM_MODULE="${simpleWasmModule}/simple_wasm_module.wasm"
               exec ${pkgs.bash}/bin/bash ${./nix/run-e2e-tests.sh}
             ''}";
           };

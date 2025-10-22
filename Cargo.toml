@@ -1,5 +1,5 @@
 [workspace]
-members = ["server", "client", "e2e_tests"]
+members = ["server", "client", "e2e_tests", "examples/simple-component"]
 resolver = "2"
 
 [workspace.package]
