@@ -36,6 +36,7 @@ provision:
         sudo \
         ca-certificates \
         libicu74 \
+        nodejs \
         npm
 
       # Install Nix (required for building the project)
