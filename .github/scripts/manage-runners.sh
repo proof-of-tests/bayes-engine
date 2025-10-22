@@ -50,21 +50,25 @@ Commands:
   list              List all Lima VMs
 
 Setup Instructions:
-  1. Create two runner VMs:
+  1. Get a registration token from GitHub:
+     Go to: https://github.com/YOUR_ORG/YOUR_REPO/settings/actions/runners/new
+     Select Linux and ARM64, then copy the registration token
+
+  2. Create two runner VMs:
      $0 create gh-runner-1
      $0 create gh-runner-2
 
-  2. Configure each runner (inside the VM):
+  3. Configure each runner (inside the VM):
      $0 shell gh-runner-1
      # Inside VM:
      git clone https://github.com/YOUR_ORG/YOUR_REPO.git
      cd YOUR_REPO
-     ./.github/scripts/setup-runner.sh <GITHUB_TOKEN> gh-runner-1
+     ./.github/scripts/setup-runner.sh <REG_TOKEN> gh-runner-1
      exit
 
-  3. Repeat for gh-runner-2
+  4. Repeat for gh-runner-2
 
-  4. Check status:
+  5. Check status:
      $0 status
 
 EOF
