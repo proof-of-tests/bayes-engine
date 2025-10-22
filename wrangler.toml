@@ -9,6 +9,9 @@ command = "nix build .#webapp"
 # CloudFlare Workers will automatically serve these files
 [assets]
 directory = "result/assets"
+# Enable SPA mode: serve index.html for any route that doesn't match a static file
+# This allows client-side routing to work with direct URL access
+not_found_handling = "single-page-application"
 
 # Hyperdrive database binding for Postgres connectivity
 [[hyperdrive]]
@@ -18,3 +21,7 @@ id = "a88d53af1e344d80bdd1ab8f88692b14"
 # E2E testing environment - uses pre-compiled files without running build
 [env.e2e]
 # No build command - assumes result/ directory already exists with compiled files
+
+[env.e2e.assets]
+directory = "result/assets"
+not_found_handling = "single-page-application"

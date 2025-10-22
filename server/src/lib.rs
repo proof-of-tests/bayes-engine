@@ -146,6 +146,12 @@ async fn fetch(req: Request, env: Env, _ctx: worker::Context) -> Result<Response
                 Err(e) => Response::error(format!("Failed to insert message: {}", e), 500),
             }
         })
+        .get_async("/*catchall", |_req, _ctx| async move {
+            // For SPA routing: serve index.html for all non-API routes
+            // This allows the Dioxus router to handle routing on the client side
+            // Static assets (/pkg/*, /style.css) are served by CloudFlare Workers Assets
+            Response::from_html(include_str!("../../public/index.html"))
+        })
         .run(req, env)
         .await
 }

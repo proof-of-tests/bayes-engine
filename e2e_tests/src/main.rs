@@ -53,23 +53,34 @@ async fn main() -> Result<()> {
 }
 
 pub async fn run(driver: &WebDriver, webapp_url: &str) -> Result<()> {
-    // Navigate to the app running on the configured port
-    driver.goto(webapp_url).await?;
+    // Test 1: Direct route loading
+    // First test that we can directly navigate to /tests route
+    println!("Testing direct navigation to /tests...");
+    driver.goto(&format!("{}/tests", webapp_url)).await?;
 
     // Wait for the WASM to load and hydrate the page
     println!("Waiting for page to load and hydrate...");
     tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
-    // Navigate to the tests page by clicking the link
-    println!("Navigating to tests page...");
+    // Verify we're on the tests page by checking for test-specific elements
+    let counter_display = driver.find(By::Css(".counter-display")).await?;
+    println!("Successfully loaded /tests route directly");
+
+    // Now test navigation via link (existing test)
+    println!("Navigating to home page...");
+    driver.goto(webapp_url).await?;
+    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+
+    println!("Navigating to tests page via link...");
     let tests_link = driver.find(By::Css("a[href='/tests']")).await?;
     tests_link.click().await?;
 
     // Wait for navigation and re-render
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
-    // Test 1: Counter functionality
+    // Test 2: Counter functionality
     println!("Testing counter button...");
+    // Find counter_display again since we navigated
     let counter_display = driver.find(By::Css(".counter-display")).await?;
     let initial_count = counter_display.text().await?;
     assert_eq!(initial_count, "0", "Initial count should be 0");
@@ -83,7 +94,7 @@ pub async fn run(driver: &WebDriver, webapp_url: &str) -> Result<()> {
     let new_count = counter_display.text().await?;
     assert_eq!(new_count, "1", "Count should be 1 after clicking");
 
-    // Test 2: Uppercase API functionality
+    // Test 3: Uppercase API functionality
     println!("Testing uppercase API...");
     let text_input = driver.find(By::Css(".text-input")).await?;
     text_input.send_keys("hello world").await?;
