@@ -18,6 +18,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Setup Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
       - name: Build webapp
         run: nix build .#webapp
 

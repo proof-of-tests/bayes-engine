@@ -14,6 +14,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Setup Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
       - name: Run flake checks
         run: nix flake check
 
@@ -24,6 +30,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Setup Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
 
       - name: Run e2e tests
         run: nix run .#run-e2e-tests
