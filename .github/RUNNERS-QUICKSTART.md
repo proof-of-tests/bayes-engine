@@ -40,45 +40,18 @@ cd /path/to/bayes-engine
 ### 3. Configure First Runner
 
 ```bash
-# Open shell in first runner
-./.github/scripts/manage-runners.sh shell gh-runner-1
+limactl shell gh-runner-1 "~/setup-runner.sh REG_TOKEN"
 ```
 
-Inside the VM:
-
-```bash
-# Clone the repository
-git clone https://github.com/YOUR_USERNAME/bayes-engine.git
-cd bayes-engine
-
-# Run setup script (replace REG_TOKEN with your registration token)
-./.github/scripts/setup-runner.sh REG_TOKEN gh-runner-1
-
-# Wait for setup to complete, then exit
-exit
-```
+Replace `REG_TOKEN` with your actual registration token. The setup script is automatically created in the VM during
+provisioning.
 
 ### 4. Configure Second Runner
 
 You can reuse the same registration token if it hasn't expired, or get a new one from GitHub.
 
 ```bash
-# Open shell in second runner
-./.github/scripts/manage-runners.sh shell gh-runner-2
-```
-
-Inside the VM:
-
-```bash
-# Clone the repository
-git clone https://github.com/YOUR_USERNAME/bayes-engine.git
-cd bayes-engine
-
-# Run setup script (same or new registration token)
-./.github/scripts/setup-runner.sh REG_TOKEN gh-runner-2
-
-# Exit
-exit
+limactl shell gh-runner-2 "~/setup-runner.sh REG_TOKEN"
 ```
 
 ### 5. Verify Runners

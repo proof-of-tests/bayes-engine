@@ -83,17 +83,14 @@ case "$command" in
     fi
 
     echo "Creating Lima VM: $runner_name"
-    # Mount the .github/scripts directory read-only for easy access
-    limactl start --name="$runner_name" --yes \
-      --mount-type=9p \
-      --mount="$REPO_ROOT/.github/scripts" \
-      "$LIMA_CONFIG"
+    limactl start --name="$runner_name" --yes "$LIMA_CONFIG"
     echo ""
     echo "✅ VM created successfully!"
     echo ""
     echo "Next steps:"
-    echo "  1. Shell into the VM: $0 shell $runner_name"
-    echo "  2. Clone the repository and run setup-runner.sh"
+    echo "  1. Get a registration token from GitHub:"
+    echo "     https://github.com/proof-of-tests/bayes-engine/settings/actions/runners/new"
+    echo "  2. Run: limactl shell $runner_name \"~/setup-runner.sh <REG_TOKEN>\""
     ;;
 
   start)

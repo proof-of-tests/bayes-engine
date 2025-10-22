@@ -71,8 +71,7 @@ This will:
 
 ### 2. Configure Runners
 
-For each runner, you need to install and register the GitHub Actions runner software using a registration token from
-GitHub.
+For each runner, you need to register it with GitHub using a registration token.
 
 #### Get Registration Token
 
@@ -84,31 +83,18 @@ GitHub.
 #### Configure First Runner
 
 ```bash
-# Shell into first runner
-./.github/scripts/manage-runners.sh shell gh-runner-1
-
-# Inside the VM:
-git clone https://github.com/YOUR_ORG/YOUR_REPO.git
-cd YOUR_REPO
-./.github/scripts/setup-runner.sh <REG_TOKEN> gh-runner-1
-exit
+limactl shell gh-runner-1 "~/setup-runner.sh <REG_TOKEN>"
 ```
 
-Replace `<REG_TOKEN>` with the token you copied from GitHub.
+Replace `<REG_TOKEN>` with the token you copied from GitHub. The script is automatically created in the VM's home
+directory during provisioning.
 
 #### Configure Second Runner
 
-Get a new registration token from GitHub (the previous one can be reused if still valid), then:
+Get a new registration token from GitHub (or reuse the previous one if still valid), then:
 
 ```bash
-# Shell into second runner
-./.github/scripts/manage-runners.sh shell gh-runner-2
-
-# Inside the VM:
-git clone https://github.com/YOUR_ORG/YOUR_REPO.git
-cd YOUR_REPO
-./.github/scripts/setup-runner.sh <REG_TOKEN> gh-runner-2
-exit
+limactl shell gh-runner-2 "~/setup-runner.sh <REG_TOKEN>"
 ```
 
 **Note**: Registration tokens expire after 1 hour. If your token expires, generate a new one from the GitHub UI.
