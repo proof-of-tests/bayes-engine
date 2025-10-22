@@ -25,3 +25,9 @@ target
 
 /target
 result
+
+# CloudFlare Workers development variables
+.dev.vars
+
+# Docker volumes
+postgres_data/
