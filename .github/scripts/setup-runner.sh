@@ -45,35 +45,48 @@ fi
 
 echo "Setting up GitHub Actions runner: $RUNNER_NAME"
 echo "Repository: $REPO_FULL_NAME"
+echo ""
 
 # Download the latest runner package for Linux ARM64
 RUNNER_VERSION="2.329.0"
 RUNNER_ARCH="linux-arm64"
-RUNNER_URL="https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-${RUNNER_ARCH}-${RUNNER_VERSION}.tar.gz"
+RUNNER_PACKAGE="actions-runner-${RUNNER_ARCH}-${RUNNER_VERSION}.tar.gz"
+RUNNER_URL="https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/${RUNNER_PACKAGE}"
+RUNNER_HASH="56768348b3d643a6a29d4ad71e9bdae0dc0ef1eb01afe0f7a8ee097b039bfaaf"
 
-# Create runner directory
+# Create a folder
 RUNNER_DIR="$HOME/actions-runner-$RUNNER_NAME"
 mkdir -p "$RUNNER_DIR"
 cd "$RUNNER_DIR"
 
-# Download and extract runner
-echo "Downloading runner..."
-curl -o actions-runner.tar.gz -L "$RUNNER_URL"
-tar xzf actions-runner.tar.gz
-rm actions-runner.tar.gz
+# Download the latest runner package
+echo "Downloading the latest runner package..."
+curl -o "${RUNNER_PACKAGE}" -L "${RUNNER_URL}"
 
-# Configure the runner
+# Optional: Validate the hash
+echo "Validating hash..."
+if ! echo "${RUNNER_HASH}  ${RUNNER_PACKAGE}" | shasum -a 256 -c; then
+  echo "Error: Hash validation failed. The downloaded file may be corrupted."
+  exit 1
+fi
+
+# Extract the installer
+echo "Extracting installer..."
+tar xzf "./${RUNNER_PACKAGE}"
+rm "${RUNNER_PACKAGE}"
+
+# Create the runner and start the configuration experience
+echo ""
 echo "Configuring runner..."
 ./config.sh \
   --url "https://github.com/${REPO_FULL_NAME}" \
   --token "$REG_TOKEN" \
   --name "$RUNNER_NAME" \
   --labels "self-hosted,Linux,ARM64" \
-  --work "_work" \
-  --unattended \
-  --replace
+  --unattended
 
-# Install as a service
+# Install and start as a systemd service (instead of ./run.sh)
+echo ""
 echo "Installing runner as systemd service..."
 sudo ./svc.sh install
 sudo ./svc.sh start
