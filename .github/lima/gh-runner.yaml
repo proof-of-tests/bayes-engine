@@ -1,0 +1,84 @@
+# Lima configuration for GitHub Actions self-hosted runner (aarch64-linux)
+# Usage: limactl start --name=gh-runner-1 .github/lima/gh-runner.yaml
+#        limactl start --name=gh-runner-2 .github/lima/gh-runner.yaml
+
+images:
+  # Try to use a release image with Apple Silicon support
+  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
+    arch: "aarch64"
+
+# CPUs: 4 (adjust based on your Mac's specs)
+cpus: 4
+
+# Memory: 8GB (adjust based on your Mac's specs)
+memory: "8GiB"
+
+# Disk: 50GB should be enough for runners
+disk: "50GiB"
+
+# Mounts for accessing the repository (optional, for debugging)
+mounts:
+  - location: "~"
+    writable: false
+  - location: "/tmp/lima"
+    writable: true
+
+# Provision scripts to install required software
+provision:
+  # Install system dependencies
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+
+      # Update package lists
+      apt-get update
+
+      # Install required packages
+      apt-get install -y \
+        curl \
+        git \
+        jq \
+        tar \
+        sudo \
+        ca-certificates \
+        libicu74
+
+      # Install Nix (required for building the project)
+      if ! command -v nix &> /dev/null; then
+        curl -L https://nixos.org/nix/install | sh -s -- --daemon --yes
+      fi
+
+      # Create a runner user (if it doesn't exist)
+      if ! id -u runner &> /dev/null; then
+        useradd -m -s /bin/bash runner
+        usermod -aG sudo runner
+        echo "runner ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+      fi
+
+  # Set up Nix for the runner user
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+
+      # Source Nix if installed
+      if [ -e /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh ]; then
+        . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+      fi
+
+      # Enable experimental features for Nix flakes
+      mkdir -p ~/.config/nix
+      cat > ~/.config/nix/nix.conf <<EOF
+experimental-features = nix-command flakes
+EOF
+
+# SSH settings
+ssh:
+  loadDotSSHPubKeys: true
+
+# Enable systemd
+systemd: true
+
+# Upgrade packages on boot
+upgradePackages: true
