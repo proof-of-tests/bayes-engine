@@ -83,10 +83,10 @@ case "$command" in
     fi
 
     echo "Creating Lima VM: $runner_name"
-    # Mount the .github/scripts directory for easy access
+    # Mount the .github/scripts directory read-only for easy access
     limactl start --name="$runner_name" --yes \
       --mount-type=9p \
-      --mount="$REPO_ROOT/.github/scripts:w" \
+      --mount="$REPO_ROOT/.github/scripts" \
       "$LIMA_CONFIG"
     echo ""
     echo "✅ VM created successfully!"
