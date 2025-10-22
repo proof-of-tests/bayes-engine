@@ -5,9 +5,22 @@ on:
     types: [closed]
 
 jobs:
+  check-runners:
+    name: Check Runner Availability
+    runs-on: ubuntu-latest
+    outputs:
+      self-hosted-available: ${{ steps.check.outputs.available }}
+    steps:
+      - name: Check if self-hosted runners are available
+        id: check
+        uses: cloudposse/github-action-runner-available@v1
+        with:
+          runner-labels: self-hosted,Linux,ARM64
+
   cleanup:
     name: Delete PR Preview Deployment
-    runs-on: [self-hosted, Linux, ARM64]
+    needs: check-runners
+    runs-on: ${{ needs.check-runners.outputs.self-hosted-available == 'true' && fromJSON('["self-hosted", "Linux", "ARM64"]') || 'ubuntu-24.04-arm' }}
     permissions:
       contents: read
       pull-requests: write

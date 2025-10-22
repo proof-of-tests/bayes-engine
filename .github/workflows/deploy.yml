@@ -8,9 +8,22 @@ on:
   workflow_dispatch:
 
 jobs:
+  check-runners:
+    name: Check Runner Availability
+    runs-on: ubuntu-latest
+    outputs:
+      self-hosted-available: ${{ steps.check.outputs.available }}
+    steps:
+      - name: Check if self-hosted runners are available
+        id: check
+        uses: cloudposse/github-action-runner-available@v1
+        with:
+          runner-labels: self-hosted,Linux,ARM64
+
   deploy:
     name: Deploy to CloudFlare
-    runs-on: [self-hosted, Linux, ARM64]
+    needs: check-runners
+    runs-on: ${{ needs.check-runners.outputs.self-hosted-available == 'true' && fromJSON('["self-hosted", "Linux", "ARM64"]') || 'ubuntu-24.04-arm' }}
     permissions:
       contents: read
       pull-requests: write
@@ -22,6 +35,7 @@ jobs:
         uses: DeterminateSystems/nix-installer-action@main
 
       - name: Setup Nix cache
+        if: runner.environment != 'self-hosted'
         uses: DeterminateSystems/magic-nix-cache-action@main
 
       - name: Build webapp

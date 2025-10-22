@@ -7,9 +7,22 @@ on:
     branches: [main]
 
 jobs:
+  check-runners:
+    name: Check Runner Availability
+    runs-on: ubuntu-latest
+    outputs:
+      self-hosted-available: ${{ steps.check.outputs.available }}
+    steps:
+      - name: Check if self-hosted runners are available
+        id: check
+        uses: cloudposse/github-action-runner-available@v1
+        with:
+          runner-labels: self-hosted,Linux,ARM64
+
   nix-checks:
     name: Nix Flake Checks
-    runs-on: [self-hosted, Linux, ARM64]
+    needs: check-runners
+    runs-on: ${{ needs.check-runners.outputs.self-hosted-available == 'true' && fromJSON('["self-hosted", "Linux", "ARM64"]') || 'ubuntu-24.04-arm' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -18,6 +31,7 @@ jobs:
         uses: DeterminateSystems/nix-installer-action@main
 
       - name: Setup Nix cache
+        if: runner.environment != 'self-hosted'
         uses: DeterminateSystems/magic-nix-cache-action@main
 
       - name: Run flake checks
@@ -25,8 +39,8 @@ jobs:
 
   e2e-tests:
     name: End-to-End Tests
-    runs-on: [self-hosted, Linux, ARM64]
-    needs: nix-checks
+    needs: [check-runners, nix-checks]
+    runs-on: ${{ needs.check-runners.outputs.self-hosted-available == 'true' && fromJSON('["self-hosted", "Linux", "ARM64"]') || 'ubuntu-24.04-arm' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -35,6 +49,7 @@ jobs:
         uses: DeterminateSystems/nix-installer-action@main
 
       - name: Setup Nix cache
+        if: runner.environment != 'self-hosted'
         uses: DeterminateSystems/magic-nix-cache-action@main
 
       - name: Run e2e tests
