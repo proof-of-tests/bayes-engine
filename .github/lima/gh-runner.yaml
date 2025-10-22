@@ -62,9 +62,7 @@ provision:
 
       # Enable experimental features for Nix flakes
       mkdir -p ~/.config/nix
-      cat > ~/.config/nix/nix.conf <<EOF
-experimental-features = nix-command flakes
-EOF
+      echo "experimental-features = nix-command flakes" > ~/.config/nix/nix.conf
 
 # SSH settings
 ssh:
