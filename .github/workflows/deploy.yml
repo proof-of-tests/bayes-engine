@@ -19,7 +19,9 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Build webapp
-        run: nix build .#webapp
+        run: |
+          . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+          nix build .#webapp
 
       - name: Check if deployment needed (PR Preview)
         if: github.event_name == 'pull_request'
