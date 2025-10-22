@@ -27,24 +27,11 @@ fi
 REG_TOKEN="$1"
 RUNNER_NAME="$2"
 
-# Get repository from git remote (assumes we're in repo directory)
-if [ -d .git ]; then
-  REPO_URL=$(git config --get remote.origin.url)
-  # Extract owner/repo from URL
-  if [[ $REPO_URL =~ github.com[:/](.+/.+)(\.git)?$ ]]; then
-    REPO_FULL_NAME="${BASH_REMATCH[1]%.git}"
-  else
-    echo "Error: Could not extract repository from git remote"
-    exit 1
-  fi
-else
-  echo "Error: Not in a git repository. Please provide REPO_FULL_NAME environment variable."
-  echo "Example: REPO_FULL_NAME=owner/repo $0 ..."
-  exit 1
-fi
+# Repository URL
+REPO_URL="https://github.com/proof-of-tests/bayes-engine"
 
 echo "Setting up GitHub Actions runner: $RUNNER_NAME"
-echo "Repository: $REPO_FULL_NAME"
+echo "Repository: $REPO_URL"
 echo ""
 
 # Download the latest runner package for Linux ARM64
@@ -79,7 +66,7 @@ rm "${RUNNER_PACKAGE}"
 echo ""
 echo "Configuring runner..."
 ./config.sh \
-  --url "https://github.com/${REPO_FULL_NAME}" \
+  --url "$REPO_URL" \
   --token "$REG_TOKEN" \
   --name "$RUNNER_NAME" \
   --labels "self-hosted,Linux,ARM64" \
@@ -98,7 +85,7 @@ echo "To check status:"
 echo "  sudo ./svc.sh status"
 echo ""
 echo "To view logs:"
-echo "  journalctl -u actions.runner.${REPO_FULL_NAME/\//.}.${RUNNER_NAME}.service -f"
+echo "  journalctl -u actions.runner.proof-of-tests.bayes-engine.${RUNNER_NAME}.service -f"
 echo ""
 echo "To stop the runner:"
 echo "  sudo ./svc.sh stop"
