@@ -6,17 +6,10 @@ on:
   pull_request:
     branches: [main]
 
-permissions:
-  actions: read
-  contents: read
-
 jobs:
   determine-runner:
     name: Determine Runner
     runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      contents: read
     outputs:
       runner: ${{ steps.set-runner.outputs.use-runner }}
     steps:
