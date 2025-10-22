@@ -12,6 +12,20 @@ We use Lima to create lightweight Linux VMs on macOS that run GitHub Actions sel
 - **Local control** over runner configuration
 - **Cost savings** compared to GitHub-hosted runners for intensive workloads
 
+## Security Warning
+
+**IMPORTANT**: GitHub strongly recommends using self-hosted runners only with **private repositories**. Self-hosted
+runners used with public repositories can be a security risk:
+
+- Forks of public repositories can potentially run dangerous code on your runner machines via pull requests
+- Malicious actors could execute arbitrary code in your infrastructure
+- Secrets and environment variables may be exposed to untrusted code
+
+For public repositories, always use GitHub-hosted runners unless you have specific isolation and security measures in
+place. See
+[GitHub's security hardening guide](https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#hardening-for-self-hosted-runners)
+for more information.
+
 ## Architecture
 
 ```
@@ -59,7 +73,9 @@ This will:
 
 For each runner, you need to install and register the GitHub Actions runner software.
 
-#### Option A: Using Personal Access Token (Recommended)
+#### Using Personal Access Token (Automated)
+
+This method uses the GitHub API to automatically obtain a time-limited registration token (expires after 1 hour):
 
 ```bash
 # Shell into first runner
@@ -76,21 +92,20 @@ exit
 # (repeat same commands with gh-runner-2)
 ```
 
-#### Option B: Using Registration Token (More Secure)
+**Note**: Your Personal Access Token needs the `repo` scope (for private repos) or `public_repo` scope (for public
+repos).
+
+#### Alternative: Manual Setup via GitHub UI
+
+You can also follow GitHub's official setup process:
 
 1. Go to your repository on GitHub
 2. Navigate to Settings → Actions → Runners → New self-hosted runner
-3. Copy the registration token
-4. Use it in the setup script:
+3. Select Linux and ARM64 architecture
+4. GitHub will display step-by-step commands with a time-limited token
+5. Run these commands inside your Lima VM
 
-```bash
-limactl shell gh-runner-1
-git clone https://github.com/YOUR_ORG/YOUR_REPO.git
-cd YOUR_REPO
-
-# Modify setup-runner.sh to use the registration token directly
-# or follow GitHub's manual setup instructions
-```
+This approach doesn't require a Personal Access Token, but the registration token expires after 1 hour.
 
 ### 3. Verify Runners
 

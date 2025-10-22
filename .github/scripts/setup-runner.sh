@@ -41,7 +41,7 @@ echo "Setting up GitHub Actions runner: $RUNNER_NAME"
 echo "Repository: $REPO_FULL_NAME"
 
 # Download the latest runner package for Linux ARM64
-RUNNER_VERSION="2.321.0"  # Update this to latest version
+RUNNER_VERSION="2.329.0"
 RUNNER_ARCH="linux-arm64"
 RUNNER_URL="https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-${RUNNER_ARCH}-${RUNNER_VERSION}.tar.gz"
 
@@ -57,6 +57,7 @@ tar xzf actions-runner.tar.gz
 rm actions-runner.tar.gz
 
 # Get a registration token from GitHub API
+# Note: Registration tokens expire after 1 hour
 echo "Getting registration token from GitHub..."
 REG_TOKEN=$(curl -sS -X POST \
   -H "Accept: application/vnd.github.v3+json" \
@@ -66,6 +67,7 @@ REG_TOKEN=$(curl -sS -X POST \
 
 if [ -z "$REG_TOKEN" ] || [ "$REG_TOKEN" = "null" ]; then
   echo "Error: Failed to get registration token. Check your GitHub token permissions."
+  echo "Your token needs 'repo' scope for private repositories or 'public_repo' for public ones."
   exit 1
 fi
 

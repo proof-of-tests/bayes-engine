@@ -2,6 +2,12 @@
 
 Get your self-hosted GitHub Actions runners up and running in 5 minutes!
 
+## ⚠️ Security Warning
+
+**Self-hosted runners should only be used with private repositories.** Using them with public repositories can allow
+malicious actors to execute arbitrary code on your infrastructure via pull requests. See
+[RUNNERS.md](.github/RUNNERS.md#security-warning) for details.
+
 ## Prerequisites
 
 - macOS with Apple Silicon
@@ -15,9 +21,12 @@ Get your self-hosted GitHub Actions runners up and running in 5 minutes!
 1. Go to https://github.com/settings/tokens
 2. Click "Generate new token" → "Generate new token (classic)"
 3. Give it a name: "GitHub Runner Token"
-4. Select scope: `repo` (full control of private repositories)
+4. Select scope: `repo` (for private repos) or `public_repo` (for public repos)
 5. Click "Generate token"
 6. **Copy the token** (you won't be able to see it again!)
+
+**Note**: The setup script uses this token to obtain a time-limited registration token (expires after 1 hour) via the
+GitHub API.
 
 ### 2. Create Runner VMs
 
