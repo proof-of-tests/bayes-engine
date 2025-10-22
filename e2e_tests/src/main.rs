@@ -117,6 +117,51 @@ pub async fn run(driver: &WebDriver, webapp_url: &str) -> Result<()> {
     let result_text = driver.find(By::Css(".result-text")).await?.text().await?;
     assert_eq!(result_text, "HELLO WORLD", "Result should be uppercase");
 
+    // Test 3: WASM Executor functionality
+    println!("Testing WASM executor...");
+    if let Ok(wasm_path) = std::env::var("SIMPLE_WASM_MODULE") {
+        // Find the file input element
+        let file_input = driver
+            .find(By::Css("input[type='file'][accept='.wasm']"))
+            .await?;
+
+        // Upload the WASM file
+        file_input.send_keys(&wasm_path).await?;
+
+        // Wait for the file to be uploaded and processed
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+        // Find and click the execute button
+        let execute_button = driver.find(By::Css(".execute-button")).await?;
+        execute_button.click().await?;
+
+        // Wait for execution to complete
+        driver
+            .query(By::Css(".output-display"))
+            .wait(
+                std::time::Duration::from_secs(5),
+                std::time::Duration::from_millis(100),
+            )
+            .first()
+            .await?;
+
+        // Check the output
+        let output = driver
+            .find(By::Css(".output-display"))
+            .await?
+            .text()
+            .await?;
+        assert!(
+            output.contains("add(10, 32) = 42"),
+            "WASM execution should produce correct result, got: {}",
+            output
+        );
+
+        println!("WASM executor test passed!");
+    } else {
+        println!("Skipping WASM executor test (SIMPLE_WASM_MODULE not set)");
+    }
+
     println!("All tests passed!");
 
     Ok(())

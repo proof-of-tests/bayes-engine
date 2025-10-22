@@ -7,8 +7,11 @@ use wasm_bindgen::prelude::*;
 mod hyperloglog;
 mod hyperloglog_demo;
 mod messages_demo;
+mod wasm_executor;
+
 use hyperloglog_demo::HyperLogLogDemo;
 use messages_demo::MessagesDemo;
+use wasm_executor::WasmExecutor;
 
 #[derive(Serialize)]
 struct UppercaseRequest {
@@ -100,6 +103,10 @@ fn Tests() -> Element {
 
                 div { class: "test-box",
                     HyperLogLogDemo {}
+                }
+
+                div { class: "test-box",
+                    WasmExecutor {}
                 }
 
                 div { class: "test-box",
