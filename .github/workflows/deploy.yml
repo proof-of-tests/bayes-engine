@@ -28,7 +28,7 @@ jobs:
         with:
           primary-runner: "self-hosted,Linux,ARM64"
           fallback-runner: "ubuntu-24.04-arm"
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.PAT }}
 
   deploy:
     name: Deploy to CloudFlare
