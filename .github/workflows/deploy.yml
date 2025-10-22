@@ -7,6 +7,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+
 jobs:
   determine-runner:
     name: Determine Runner
