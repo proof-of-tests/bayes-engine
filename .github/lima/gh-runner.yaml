@@ -67,9 +67,3 @@ provision:
 # SSH settings
 ssh:
   loadDotSSHPubKeys: true
-
-# Enable systemd
-systemd: true
-
-# Upgrade packages on boot
-upgradePackages: true
