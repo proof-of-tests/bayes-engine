@@ -4,6 +4,6 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-thirtyfour = "0.35"
+thirtyfour = "0.36"
 tokio = { version = "1.26", features = ["full"] }
 anyhow = "1.0"
