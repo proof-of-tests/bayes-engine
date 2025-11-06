@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use dioxus_router::prelude::*;
+use dioxus_router::{Link, Routable, Router};
 use gloo_net::http::Request;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;

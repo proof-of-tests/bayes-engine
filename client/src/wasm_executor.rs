@@ -1,4 +1,6 @@
 use dioxus::prelude::*;
+use dioxus_web::WebFileExt;
+use gloo_file::{futures::read_as_bytes, Blob};
 use gloo_storage::{LocalStorage, Storage};
 use wasm_bindgen::prelude::*;
 
@@ -35,23 +37,35 @@ pub fn WasmExecutor() -> Element {
         spawn(async move {
             error_message.set(String::new());
 
-            if let Some(file_engine) = evt.files() {
-                let files = file_engine.files();
-                if let Some(file_name) = files.first() {
-                    if let Some(file_data) = file_engine.read_file(file_name).await {
+            let files = evt.files();
+            if !files.is_empty() {
+                let file_data = &files[0];
+                let file_name = file_data.name();
+
+                // Get the underlying web_sys::File and convert to gloo_file::Blob for reading
+                let Some(web_file) = file_data.get_web_file() else {
+                    error_message.set("Failed to get web file".to_string());
+                    return;
+                };
+                let web_blob: &web_sys::Blob = web_file.as_ref();
+                let blob = Blob::from(web_blob.clone());
+
+                // Read file contents asynchronously using gloo-file
+                match read_as_bytes(&blob).await {
+                    Ok(contents) => {
                         // Validate WASM header
-                        if file_data.len() < 4 || &file_data[0..4] != b"\0asm" {
+                        if contents.len() < 4 || &contents[0..4] != b"\0asm" {
                             error_message
                                 .set("Invalid WASM file: missing magic number".to_string());
                             return;
                         }
 
                         // Store in localStorage
-                        let storage_key = format!("wasm_file_{}", file_name);
-                        if LocalStorage::set(&storage_key, &file_data).is_ok() {
+                        let storage_key = format!("wasm_file_{}", &file_name);
+                        if LocalStorage::set(&storage_key, &contents).is_ok() {
                             // Update file list
                             let mut files_list = stored_files();
-                            if !files_list.contains(file_name) {
+                            if !files_list.contains(&file_name) {
                                 files_list.push(file_name.clone());
                                 let _ = LocalStorage::set(STORAGE_KEY, &files_list);
                                 stored_files.set(files_list);
@@ -59,12 +73,15 @@ pub fn WasmExecutor() -> Element {
 
                             selected_file.set(Some(WasmFile {
                                 name: file_name.clone(),
-                                data: file_data,
+                                data: contents,
                             }));
                         } else {
                             error_message
                                 .set("Failed to store file in browser storage".to_string());
                         }
+                    }
+                    Err(_) => {
+                        error_message.set("Failed to read file".to_string());
                     }
                 }
             }
