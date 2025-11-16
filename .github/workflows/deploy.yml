@@ -58,7 +58,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy
+          command: deploy --env production
 
       - name: Deploy to CloudFlare Workers (PR Preview)
         if: github.event_name == 'pull_request' && steps.check-deployment.outputs.deploy == 'true'
@@ -75,7 +75,8 @@ jobs:
         with:
           script: |
             const prNumber = context.issue.number;
-            const previewUrl = '${{ steps.deploy-preview.outputs.deployment-url }}';
+            // Construct preview URL manually since routes are not applied to PR previews
+            const previewUrl = `https://bayes-engine-pr-${prNumber}.lemmih.workers.dev`;
             const body = `### 🚀 PR Preview Deployed\n\nYour preview deployment is ready!\n\n**Preview URL:** <a href="${previewUrl}" target="_blank" rel="noopener noreferrer">${previewUrl}</a>\n\nThis preview will be automatically deleted when the PR is closed or merged.`;
 
             // Check if we already commented
