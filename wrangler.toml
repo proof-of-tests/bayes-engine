@@ -4,7 +4,7 @@ compatibility_date = "2024-10-01"
 
 # Custom domain configuration
 routes = [
-  { pattern = "bayes.lemmih.com", zone_name = "lemmih.com" }
+  { pattern = "bayes.lemmih.com/*", zone_name = "lemmih.com" }
 ]
 
 [build]
