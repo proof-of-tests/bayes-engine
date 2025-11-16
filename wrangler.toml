@@ -21,7 +21,7 @@ id = "a88d53af1e344d80bdd1ab8f88692b14"
 # Production environment - includes custom domain routes
 [env.production]
 routes = [
-  { pattern = "bayes.lemmih.com/*", zone_name = "lemmih.com" }
+  { pattern = "bayes.lemmih.com/*", zone_name = "lemmih.com", custom_domain = true }
 ]
 
 [env.production.assets]
