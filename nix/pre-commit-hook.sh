@@ -14,7 +14,7 @@ run_check() {
   local name="$2"
   
   echo "Running $name..."
-  if "$cmd" > "$TMP_OUTPUT" 2>&1; then
+  if bash -c "$cmd" > "$TMP_OUTPUT" 2>&1; then
     echo "$name passed ✓"
     return 0
   else
