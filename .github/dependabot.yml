@@ -9,6 +9,59 @@ updates:
     labels:
       - "dependencies"
       - "rust"
+    groups:
+      # Dioxus ecosystem - all dioxus crates should be updated together
+      dioxus:
+        patterns:
+          - "dioxus*"
+        update-types:
+          - "minor"
+          - "patch"
+      # WASM/Web ecosystem - related web assembly and browser APIs
+      wasm-web:
+        patterns:
+          - "wasm-bindgen*"
+          - "js-sys"
+          - "web-sys"
+          - "wasm-streams"
+        update-types:
+          - "minor"
+          - "patch"
+      # Gloo ecosystem - web utilities from the gloo project
+      gloo:
+        patterns:
+          - "gloo-*"
+        update-types:
+          - "minor"
+          - "patch"
+      # Serde ecosystem - serialization/deserialization
+      serde:
+        patterns:
+          - "serde*"
+        update-types:
+          - "minor"
+          - "patch"
+      # Futures ecosystem - async utilities
+      futures:
+        patterns:
+          - "futures-*"
+        update-types:
+          - "minor"
+          - "patch"
+      # Tokio ecosystem - async runtime
+      tokio:
+        patterns:
+          - "tokio*"
+        update-types:
+          - "minor"
+          - "patch"
+      # Cloudflare Workers ecosystem
+      worker:
+        patterns:
+          - "worker*"
+        update-types:
+          - "minor"
+          - "patch"
 
   # GitHub Actions
   - package-ecosystem: "github-actions"
