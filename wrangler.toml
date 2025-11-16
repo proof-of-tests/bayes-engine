@@ -18,6 +18,16 @@ not_found_handling = "single-page-application"
 binding = "HYPERDRIVE"
 id = "a88d53af1e344d80bdd1ab8f88692b14"
 
+# Production environment - includes custom domain routes
+[env.production]
+routes = [
+  { pattern = "bayes.lemmih.com/*", zone_name = "lemmih.com" }
+]
+
+[env.production.assets]
+directory = "result/assets"
+not_found_handling = "single-page-application"
+
 # E2E testing environment - uses pre-compiled files without running build
 [env.e2e]
 # No build command - assumes result/ directory already exists with compiled files
