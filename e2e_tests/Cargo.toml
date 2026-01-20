@@ -5,5 +5,5 @@ edition.workspace = true
 
 [dependencies]
 thirtyfour = "0.36"
-tokio = { version = "1.26", features = ["full"] }
+tokio = { version = "1.49", features = ["full"] }
 anyhow = "1.0"
