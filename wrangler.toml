@@ -24,6 +24,10 @@ routes = [
   { pattern = "bayes.lemmih.com", zone_name = "lemmih.com", custom_domain = true }
 ]
 
+[[env.production.hyperdrive]]
+binding = "HYPERDRIVE"
+id = "a88d53af1e344d80bdd1ab8f88692b14"
+
 [env.production.assets]
 directory = "result/assets"
 not_found_handling = "single-page-application"
@@ -31,6 +35,12 @@ not_found_handling = "single-page-application"
 # E2E testing environment - uses pre-compiled files without running build
 [env.e2e]
 # No build command - assumes result/ directory already exists with compiled files
+
+# Hyperdrive for e2e tests - requires CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE
+# environment variable to be set (e.g., from GitHub secrets)
+[[env.e2e.hyperdrive]]
+binding = "HYPERDRIVE"
+id = "a88d53af1e344d80bdd1ab8f88692b14"
 
 [env.e2e.assets]
 directory = "result/assets"
