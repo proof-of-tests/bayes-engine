@@ -233,18 +233,11 @@ async fn execute_wasm_module(wasm_bytes: &[u8]) -> Result<String, String> {
     // Create a linker (for imports)
     let linker = Linker::new(&engine);
 
-    // Instantiate the module (without running start function)
-    // Note: We use the deprecated `instantiate` method because we want to avoid
-    // running the start function. The recommended `instantiate_and_start` would
-    // automatically run the start function.
-    #[allow(deprecated)]
-    let pre_instance = linker
-        .instantiate(&mut store, &module)
+    // Instantiate the module
+    // Note: If the module has a start function, it will be executed automatically.
+    let instance = linker
+        .instantiate_and_start(&mut store, &module)
         .map_err(|e| format!("Failed to instantiate module: {}", e))?;
-
-    let instance = pre_instance
-        .ensure_no_start(&mut store)
-        .map_err(|e| format!("Module has start function, which is not supported: {}", e))?;
 
     // Try to call the add function as a test
     if let Ok(add_func) = instance.get_typed_func::<(i32, i32), i32>(&store, "add") {
