@@ -38,4 +38,7 @@ jobs:
         uses: DeterminateSystems/magic-nix-cache-action@main
 
       - name: Run e2e tests
+        env:
+          # Provides local Postgres connection for Hyperdrive emulation in wrangler dev
+          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ${{ secrets.NEON_DATABASE_URL }}
         run: nix run .#run-e2e-tests
