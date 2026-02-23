@@ -1,14 +1,14 @@
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use js_sys::{Array, Function, Object, Reflect, Uint8Array};
 use once_cell::sync::Lazy;
-use rsa::pkcs1v15::{Signature, VerifyingKey};
-use rsa::signature::Verifier;
-use rsa::{BigUint, RsaPublicKey};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Mutex;
+use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen_futures::JsFuture;
 use worker::*;
 
 const OIDC_CONFIG_URL: &str =
@@ -219,6 +219,108 @@ fn decode_base64url(input: &str) -> std::result::Result<Vec<u8>, ApiError> {
     })
 }
 
+fn js_value_to_string(value: JsValue) -> String {
+    value
+        .as_string()
+        .unwrap_or_else(|| "JavaScript error".to_string())
+}
+
+fn set_js_property(
+    target: &Object,
+    name: &str,
+    value: &JsValue,
+) -> std::result::Result<(), ApiError> {
+    Reflect::set(target.as_ref(), &JsValue::from_str(name), value)
+        .map_err(|e| ApiError::new(500, "crypto_setup_failed", js_value_to_string(e)))?;
+    Ok(())
+}
+
+fn get_function(target: &JsValue, name: &str) -> std::result::Result<Function, ApiError> {
+    Reflect::get(target, &JsValue::from_str(name))
+        .map_err(|e| ApiError::new(500, "crypto_setup_failed", js_value_to_string(e)))?
+        .dyn_into::<Function>()
+        .map_err(|_| ApiError::new(500, "crypto_setup_failed", format!("Missing {}", name)))
+}
+
+async fn verify_rs256_signature_with_webcrypto(
+    signing_input: &[u8],
+    signature: &[u8],
+    modulus_b64url: &str,
+    exponent_b64url: &str,
+) -> std::result::Result<bool, ApiError> {
+    let global = js_sys::global();
+    let crypto = Reflect::get(&global, &JsValue::from_str("crypto"))
+        .map_err(|e| ApiError::new(500, "crypto_setup_failed", js_value_to_string(e)))?;
+    let subtle = Reflect::get(&crypto, &JsValue::from_str("subtle"))
+        .map_err(|e| ApiError::new(500, "crypto_setup_failed", js_value_to_string(e)))?;
+
+    let import_key = get_function(&subtle, "importKey")?;
+    let verify = get_function(&subtle, "verify")?;
+
+    let jwk = Object::new();
+    set_js_property(&jwk, "kty", &JsValue::from_str("RSA"))?;
+    set_js_property(&jwk, "n", &JsValue::from_str(modulus_b64url))?;
+    set_js_property(&jwk, "e", &JsValue::from_str(exponent_b64url))?;
+    set_js_property(&jwk, "alg", &JsValue::from_str("RS256"))?;
+    set_js_property(&jwk, "ext", &JsValue::TRUE)?;
+
+    let key_ops = Array::new();
+    key_ops.push(&JsValue::from_str("verify"));
+    set_js_property(&jwk, "key_ops", key_ops.as_ref())?;
+
+    let import_algorithm = Object::new();
+    set_js_property(
+        &import_algorithm,
+        "name",
+        &JsValue::from_str("RSASSA-PKCS1-v1_5"),
+    )?;
+    let hash_algorithm = Object::new();
+    set_js_property(&hash_algorithm, "name", &JsValue::from_str("SHA-256"))?;
+    set_js_property(&import_algorithm, "hash", hash_algorithm.as_ref())?;
+
+    let key_promise = import_key
+        .call5(
+            &subtle,
+            &JsValue::from_str("jwk"),
+            jwk.as_ref(),
+            import_algorithm.as_ref(),
+            &JsValue::FALSE,
+            key_ops.as_ref(),
+        )
+        .map_err(|e| ApiError::new(401, "invalid_token", js_value_to_string(e)))?;
+    let crypto_key = JsFuture::from(js_sys::Promise::from(key_promise))
+        .await
+        .map_err(|e| ApiError::new(401, "invalid_token", js_value_to_string(e)))?;
+
+    let signature_array = Uint8Array::new_with_length(signature.len() as u32);
+    signature_array.copy_from(signature);
+    let data_array = Uint8Array::new_with_length(signing_input.len() as u32);
+    data_array.copy_from(signing_input);
+
+    let verify_algorithm = Object::new();
+    set_js_property(
+        &verify_algorithm,
+        "name",
+        &JsValue::from_str("RSASSA-PKCS1-v1_5"),
+    )?;
+
+    let verify_promise = verify
+        .call4(
+            &subtle,
+            verify_algorithm.as_ref(),
+            &crypto_key,
+            signature_array.as_ref(),
+            data_array.as_ref(),
+        )
+        .map_err(|e| ApiError::new(401, "invalid_token", js_value_to_string(e)))?;
+
+    let verify_result = JsFuture::from(js_sys::Promise::from(verify_promise))
+        .await
+        .map_err(|e| ApiError::new(401, "invalid_token", js_value_to_string(e)))?;
+
+    Ok(verify_result.as_bool().unwrap_or(false))
+}
+
 fn extract_bearer_token(req: &Request) -> std::result::Result<String, ApiError> {
     let auth_header = req
         .headers()
@@ -366,26 +468,17 @@ async fn verify_and_decode_oidc_token(token: &str) -> std::result::Result<OidcCl
         .e
         .as_ref()
         .ok_or_else(|| ApiError::new(401, "invalid_token", "JWK missing exponent"))?;
-
-    let modulus = BigUint::from_bytes_be(&decode_base64url(n)?);
-    let exponent = BigUint::from_bytes_be(&decode_base64url(e)?);
-
-    let key = RsaPublicKey::new(modulus, exponent).map_err(|_| {
-        ApiError::new(
+    let signing_input = format!("{}.{}", parts[0], parts[1]);
+    let signature_valid =
+        verify_rs256_signature_with_webcrypto(signing_input.as_bytes(), &signature_bytes, n, e)
+            .await?;
+    if !signature_valid {
+        return Err(ApiError::new(
             401,
             "invalid_token",
-            "Invalid RSA public key from JWK values",
-        )
-    })?;
-
-    let verifying_key = VerifyingKey::<Sha256>::new(key);
-    let signature = Signature::try_from(signature_bytes.as_slice())
-        .map_err(|_| ApiError::new(401, "invalid_token", "Invalid JWT signature encoding"))?;
-
-    let signing_input = format!("{}.{}", parts[0], parts[1]);
-    verifying_key
-        .verify(signing_input.as_bytes(), &signature)
-        .map_err(|_| ApiError::new(401, "invalid_token", "JWT signature verification failed"))?;
+            "JWT signature verification failed",
+        ));
+    }
 
     let claims: OidcClaims = serde_json::from_slice(&payload_bytes)
         .map_err(|_| ApiError::new(401, "invalid_token", "Invalid JWT payload JSON"))?;
