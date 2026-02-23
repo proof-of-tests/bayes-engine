@@ -1,0 +1,128 @@
+name: CI WASM Upload PoC
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  upload-wasm:
+    name: Upload Sample WASM to bayes.lemmih.com
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Setup Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Build webapp
+        run: nix build .#webapp
+
+      - name: Prepare WASM metadata
+        id: wasm
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          WASM_FILE="result/worker/worker.wasm"
+          if [ ! -f "$WASM_FILE" ]; then
+            echo "Expected WASM file not found: $WASM_FILE" >&2
+            exit 1
+          fi
+
+          WASM_SHA256=$(sha256sum "$WASM_FILE" | awk '{print $1}')
+          WASM_SIZE=$(stat -c%s "$WASM_FILE")
+
+          echo "wasm_file=$WASM_FILE" >> "$GITHUB_OUTPUT"
+          echo "wasm_sha256=$WASM_SHA256" >> "$GITHUB_OUTPUT"
+          echo "wasm_size=$WASM_SIZE" >> "$GITHUB_OUTPUT"
+
+      - name: Request GitHub OIDC token
+        id: oidc
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+            echo "GitHub OIDC env vars are missing" >&2
+            exit 1
+          fi
+
+          OIDC_RESPONSE=$(curl -sSf \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=bayes-engine-ci-upload")
+
+          OIDC_TOKEN=$(printf '%s' "$OIDC_RESPONSE" | node -e 'const fs=require("fs");const d=JSON.parse(fs.readFileSync(0,"utf8"));process.stdout.write(d.value || "");')
+
+          if [ -z "$OIDC_TOKEN" ]; then
+            echo "Failed to obtain OIDC token" >&2
+            exit 1
+          fi
+
+          echo "oidc_token=$OIDC_TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Upload WASM to bayes.lemmih.com
+        id: upload
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          RESPONSE=$(curl -sSf \
+            -X POST "https://bayes.lemmih.com/api/ci-upload" \
+            -H "Authorization: Bearer ${{ steps.oidc.outputs.oidc_token }}" \
+            -F "file=@${{ steps.wasm.outputs.wasm_file }}" \
+            -F "declared_sha256=${{ steps.wasm.outputs.wasm_sha256 }}")
+
+          echo "$RESPONSE" > upload-response.json
+          cat upload-response.json
+
+      - name: Validate server response
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node - <<'NODE'
+          const fs = require('fs');
+          const response = JSON.parse(fs.readFileSync('upload-response.json', 'utf8'));
+          const expectedHash = process.env.EXPECTED_HASH;
+
+          if (!response.ok) {
+            throw new Error(`Upload failed: ${response.code || 'unknown'} ${response.error || ''}`);
+          }
+
+          if (response.wasm_sha256 !== expectedHash) {
+            throw new Error(`SHA mismatch: expected ${expectedHash}, got ${response.wasm_sha256}`);
+          }
+
+          if (!response.repository || !response.repository_id) {
+            throw new Error('Missing repository metadata in response');
+          }
+
+          console.log('Response validated successfully.');
+          NODE
+        env:
+          EXPECTED_HASH: ${{ steps.wasm.outputs.wasm_sha256 }}
+
+      - name: Add workflow summary
+        shell: bash
+        run: |
+          {
+            echo "## CI Upload PoC Result"
+            echo ""
+            echo "- Uploaded file: \`${{ steps.wasm.outputs.wasm_file }}\`"
+            echo "- File size: ${{ steps.wasm.outputs.wasm_size }} bytes"
+            echo "- Declared SHA-256: \`${{ steps.wasm.outputs.wasm_sha256 }}\`"
+            echo ""
+            echo "### Server Response"
+            echo '```json'
+            cat upload-response.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
