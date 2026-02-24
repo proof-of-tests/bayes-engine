@@ -4,14 +4,19 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
   upload-wasm:
     name: Upload Sample WASM to bayes.lemmih.com
     runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     permissions:
       contents: read
       id-token: write
+    env:
+      DRY_RUN: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
 
     steps:
       - name: Checkout code
@@ -32,9 +37,19 @@ jobs:
         run: |
           set -euo pipefail
 
-          WASM_FILE="result/worker/worker.wasm"
-          if [ ! -f "$WASM_FILE" ]; then
-            echo "Expected WASM file not found: $WASM_FILE" >&2
+          WASM_FILE=""
+          for CANDIDATE in \
+            "result/worker/server_bg.wasm" \
+            "result/assets/pkg/client_bg.wasm"; do
+            if [ -f "$CANDIDATE" ]; then
+              WASM_FILE="$CANDIDATE"
+              break
+            fi
+          done
+
+          if [ -z "$WASM_FILE" ]; then
+            echo "Expected WASM file not found in result outputs" >&2
+            find -L result -maxdepth 4 -type f | sort >&2 || true
             exit 1
           fi
 
@@ -79,7 +94,8 @@ jobs:
             -X POST "https://bayes.lemmih.com/api/ci-upload" \
             -H "Authorization: Bearer ${{ steps.oidc.outputs.oidc_token }}" \
             -F "file=@${{ steps.wasm.outputs.wasm_file }}" \
-            -F "declared_sha256=${{ steps.wasm.outputs.wasm_sha256 }}")
+            -F "declared_sha256=${{ steps.wasm.outputs.wasm_sha256 }}" \
+            -F "dry_run=${DRY_RUN}")
 
           echo "$RESPONSE" > upload-response.json
           cat upload-response.json
@@ -106,10 +122,15 @@ jobs:
             throw new Error('Missing repository metadata in response');
           }
 
+          if (String(response.dry_run) !== String(process.env.EXPECTED_DRY_RUN)) {
+            throw new Error(`dry_run mismatch: expected ${process.env.EXPECTED_DRY_RUN}, got ${response.dry_run}`);
+          }
+
           console.log('Response validated successfully.');
           NODE
         env:
           EXPECTED_HASH: ${{ steps.wasm.outputs.wasm_sha256 }}
+          EXPECTED_DRY_RUN: ${{ env.DRY_RUN }}
 
       - name: Add workflow summary
         shell: bash
@@ -117,6 +138,8 @@ jobs:
           {
             echo "## CI Upload PoC Result"
             echo ""
+            echo "- Mode: ${{ env.DRY_RUN == 'true' && 'dry-run' || 'live' }}"
+            echo "- Trigger: ${{ github.event_name }}"
             echo "- Uploaded file: \`${{ steps.wasm.outputs.wasm_file }}\`"
             echo "- File size: ${{ steps.wasm.outputs.wasm_size }} bytes"
             echo "- Declared SHA-256: \`${{ steps.wasm.outputs.wasm_sha256 }}\`"

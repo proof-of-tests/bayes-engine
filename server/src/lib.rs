@@ -60,6 +60,8 @@ struct CiUploadResponse {
     wasm_sha256: String,
     wasm_size_bytes: usize,
     wasm_valid: bool,
+    dry_run: bool,
+    persisted: bool,
     repository: String,
     repository_id: u64,
     run_id: Option<String>,
@@ -217,6 +219,13 @@ fn decode_base64url(input: &str) -> std::result::Result<Vec<u8>, ApiError> {
             "Failed to decode JWT part as base64url",
         )
     })
+}
+
+fn parse_bool_field(value: Option<String>) -> bool {
+    matches!(
+        value.as_deref(),
+        Some("1") | Some("true") | Some("TRUE") | Some("True") | Some("yes") | Some("on")
+    )
 }
 
 fn js_value_to_string(value: JsValue) -> String {
@@ -626,11 +635,31 @@ async fn handle_ci_upload(mut req: Request, env: Env) -> Result<Response> {
         Err(err) => return to_worker_error(err),
     };
 
-    if claims.event_name != "push" && claims.event_name != "workflow_dispatch" {
+    let form = match req.form_data().await {
+        Ok(form) => form,
+        Err(_) => {
+            return error_response(400, "invalid_form", "Expected multipart/form-data request");
+        }
+    };
+
+    let dry_run = parse_bool_field(form.get_field("dry_run"));
+
+    let event_allowed = claims.event_name == "push"
+        || claims.event_name == "workflow_dispatch"
+        || (claims.event_name == "pull_request" && dry_run);
+    if !event_allowed {
         return error_response(
             403,
             "event_not_allowed",
-            "Only push and workflow_dispatch events are accepted",
+            "Only push/workflow_dispatch events are accepted, or pull_request when dry_run=true",
+        );
+    }
+
+    if claims.event_name == "pull_request" && !dry_run {
+        return error_response(
+            403,
+            "dry_run_required",
+            "pull_request uploads must set dry_run=true",
         );
     }
 
@@ -653,13 +682,6 @@ async fn handle_ci_upload(mut req: Request, env: Env) -> Result<Response> {
         Ok(false) => {}
         Err(err) => return to_worker_error(err),
     }
-
-    let form = match req.form_data().await {
-        Ok(form) => form,
-        Err(_) => {
-            return error_response(400, "invalid_form", "Expected multipart/form-data request");
-        }
-    };
 
     let file_bytes = match form.get("file") {
         Some(FormEntry::File(file)) => match file.bytes().await {
@@ -717,6 +739,8 @@ async fn handle_ci_upload(mut req: Request, env: Env) -> Result<Response> {
         wasm_sha256,
         wasm_size_bytes: file_bytes.len(),
         wasm_valid: true,
+        dry_run,
+        persisted: false,
         repository: claims.repository,
         repository_id: claims.repository_id,
         run_id: normalize_optional_value(&claims.run_id),
