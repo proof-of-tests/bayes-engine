@@ -120,6 +120,7 @@ jobs:
             -F "declared_sha256=${{ steps.wasm.outputs.wasm_sha256 }}" \
             -F "dry_run=${DRY_RUN}")
 
+
           if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
             echo "Upload request failed with HTTP ${HTTP_CODE}" >&2
             cat upload-response.json >&2 || true
@@ -168,7 +169,7 @@ jobs:
             echo ""
             echo "- Mode: ${{ env.DRY_RUN == 'true' && 'dry-run' || 'live' }}"
             echo "- Trigger: ${{ github.event_name }}"
-            echo "- Upload URL: \`${{ env.UPLOAD_URL }}\`"
+            echo "- Upload URL: `${{ env.UPLOAD_URL }}`"
             echo "- Uploaded file: \`${{ steps.wasm.outputs.wasm_file }}\`"
             echo "- File size: ${{ steps.wasm.outputs.wasm_size }} bytes"
             echo "- Declared SHA-256: \`${{ steps.wasm.outputs.wasm_sha256 }}\`"
