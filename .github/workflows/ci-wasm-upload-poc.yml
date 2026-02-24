@@ -17,6 +17,7 @@ jobs:
       id-token: write
     env:
       DRY_RUN: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
+      UPLOAD_URL: ${{ github.event_name == 'pull_request' && format('https://bayes-engine-pr-{0}.lemmih.workers.dev/api/ci-upload', github.event.pull_request.number) || 'https://bayes.lemmih.com/api/ci-upload' }}
 
     steps:
       - name: Checkout code
@@ -84,20 +85,47 @@ jobs:
 
           echo "oidc_token=$OIDC_TOKEN" >> "$GITHUB_OUTPUT"
 
+      - name: Wait for preview deployment (PR only)
+        if: ${{ github.event_name == 'pull_request' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PREVIEW_BASE="https://bayes-engine-pr-${{ github.event.pull_request.number }}.lemmih.workers.dev"
+          echo "Waiting for preview deployment at ${PREVIEW_BASE}..."
+
+          for i in $(seq 1 30); do
+            if curl -sS -o /dev/null "${PREVIEW_BASE}/content-hash.txt"; then
+              echo "Preview deployment is ready."
+              exit 0
+            fi
+            sleep 10
+          done
+
+          echo "Preview deployment not ready after waiting." >&2
+          exit 1
+
       - name: Upload WASM to bayes.lemmih.com
         id: upload
         shell: bash
         run: |
           set -euo pipefail
 
-          RESPONSE=$(curl -sSf \
-            -X POST "https://bayes.lemmih.com/api/ci-upload" \
+          HTTP_CODE=$(curl -sS \
+            -o upload-response.json \
+            -w "%{http_code}" \
+            -X POST "${UPLOAD_URL}" \
             -H "Authorization: Bearer ${{ steps.oidc.outputs.oidc_token }}" \
             -F "file=@${{ steps.wasm.outputs.wasm_file }}" \
             -F "declared_sha256=${{ steps.wasm.outputs.wasm_sha256 }}" \
             -F "dry_run=${DRY_RUN}")
 
-          echo "$RESPONSE" > upload-response.json
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "Upload request failed with HTTP ${HTTP_CODE}" >&2
+            cat upload-response.json >&2 || true
+            exit 1
+          fi
+
           cat upload-response.json
 
       - name: Validate server response
@@ -140,6 +168,7 @@ jobs:
             echo ""
             echo "- Mode: ${{ env.DRY_RUN == 'true' && 'dry-run' || 'live' }}"
             echo "- Trigger: ${{ github.event_name }}"
+            echo "- Upload URL: \`${{ env.UPLOAD_URL }}\`"
             echo "- Uploaded file: \`${{ steps.wasm.outputs.wasm_file }}\`"
             echo "- File size: ${{ steps.wasm.outputs.wasm_size }} bytes"
             echo "- Declared SHA-256: \`${{ steps.wasm.outputs.wasm_sha256 }}\`"
