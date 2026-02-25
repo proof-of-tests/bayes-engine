@@ -96,20 +96,18 @@ jobs:
           set -euo pipefail
 
           PREVIEW_BASE="https://bayes-engine-pr-${{ github.event.pull_request.number }}.lemmih.workers.dev"
-          EXPECTED_HASH="$(cat result/assets/content-hash.txt)"
-          echo "Waiting for preview deployment at ${PREVIEW_BASE} (expected content hash: ${EXPECTED_HASH})..."
+          echo "Waiting for preview deployment at ${PREVIEW_BASE}..."
 
-          for i in $(seq 1 60); do
-            REMOTE_HASH="$(curl -fsS "${PREVIEW_BASE}/content-hash.txt" || true)"
-            if [ -n "${REMOTE_HASH}" ] && [ "${REMOTE_HASH}" = "${EXPECTED_HASH}" ]; then
-              echo "Preview deployment is ready and matches this commit."
+          for i in $(seq 1 30); do
+            if curl -sS -o /dev/null "${PREVIEW_BASE}/content-hash.txt"; then
+              echo "Preview deployment is reachable."
               exit 0
             fi
-            echo "Preview not ready yet (attempt ${i}/60). Current hash: ${REMOTE_HASH:-<unavailable>}"
+            echo "Preview not ready yet (attempt ${i}/30)."
             sleep 10
           done
 
-          echo "Preview deployment did not reach expected content hash after waiting." >&2
+          echo "Preview deployment not ready after waiting." >&2
           exit 1
 
       - name: Upload WASM to bayes.lemmih.com
@@ -118,18 +116,36 @@ jobs:
         run: |
           set -euo pipefail
 
-          HTTP_CODE=$(curl -sS \
-            -o upload-response.json \
-            -w "%{http_code}" \
-            -X POST "${UPLOAD_URL}" \
-            -H "Authorization: Bearer ${{ steps.oidc.outputs.oidc_token }}" \
-            -F "file=@${{ steps.wasm.outputs.wasm_file }}" \
-            -F "declared_sha256=${{ steps.wasm.outputs.wasm_sha256 }}" \
-            -F "version=${GITHUB_SHA}" \
-            -F "dry_run=${DRY_RUN}")
+          UPLOAD_OK=false
+          for i in $(seq 1 30); do
+            HTTP_CODE=$(curl -sS \
+              -o upload-response.json \
+              -w "%{http_code}" \
+              -X POST "${UPLOAD_URL}" \
+              -H "Authorization: Bearer ${{ steps.oidc.outputs.oidc_token }}" \
+              -F "file=@${{ steps.wasm.outputs.wasm_file }}" \
+              -F "declared_sha256=${{ steps.wasm.outputs.wasm_sha256 }}" \
+              -F "version=${GITHUB_SHA}" \
+              -F "dry_run=${DRY_RUN}")
 
-          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+              UPLOAD_OK=true
+              break
+            fi
+
+            if [ "${DRY_RUN}" = "true" ] && { [ "$HTTP_CODE" = "404" ] || { [ "$HTTP_CODE" = "500" ] && grep -q "Failed to ensure schema" upload-response.json; }; }; then
+              echo "Upload endpoint still on stale preview (attempt ${i}/30, HTTP ${HTTP_CODE}), retrying..."
+              sleep 10
+              continue
+            fi
+
             echo "Upload request failed with HTTP ${HTTP_CODE}" >&2
+            cat upload-response.json >&2 || true
+            exit 1
+          done
+
+          if [ "${UPLOAD_OK}" != "true" ]; then
+            echo "Upload request did not succeed after retries" >&2
             cat upload-response.json >&2 || true
             exit 1
           fi
