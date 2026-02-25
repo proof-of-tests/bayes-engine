@@ -1148,7 +1148,7 @@ fn build_repository_detail(
 async fn handle_list_repositories(env: Env) -> Result<Response> {
     let client = connect_to_db(&env).await?;
 
-    let rows = match client
+    let rows = client
         .query(
             "
         SELECT
@@ -1173,22 +1173,7 @@ async fn handle_list_repositories(env: Env) -> Result<Response> {
             &[],
         )
         .await
-    {
-        Ok(rows) => rows,
-        Err(_) => {
-            return json_response(
-                200,
-                &RepositoryListResponse {
-                    total_estimated_tests: 0.0,
-                    repository_count: 0,
-                    version_count: 0,
-                    file_count: 0,
-                    function_count: 0,
-                    repositories: Vec::new(),
-                },
-            );
-        }
-    };
+        .map_err(|e| Error::RustError(format!("Failed querying repositories: {}", e)))?;
 
     let mut grouped_rows: BTreeMap<String, Vec<tokio_postgres::Row>> = BTreeMap::new();
     for row in rows {
