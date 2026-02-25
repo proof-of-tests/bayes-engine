@@ -115,11 +115,9 @@ fn Home() -> Element {
         match Request::get("/api/repositories").send().await {
             Ok(response) => {
                 if !response.ok() {
-                    load_error.set(Some(api_error_message(
-                        response,
-                        "Failed loading repositories",
-                    )
-                    .await));
+                    load_error.set(Some(
+                        api_error_message(response, "Failed loading repositories").await,
+                    ));
                     return;
                 }
                 match response.json::<RepositoryListResponse>().await {
