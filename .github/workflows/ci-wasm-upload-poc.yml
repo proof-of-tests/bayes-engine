@@ -32,6 +32,9 @@ jobs:
       - name: Build webapp
         run: nix build .#webapp
 
+      - name: Build PoW test WASM module
+        run: nix build .#powTestFunctionsModule --out-link result-pow-test
+
       - name: Prepare WASM metadata
         id: wasm
         shell: bash
@@ -40,6 +43,7 @@ jobs:
 
           WASM_FILE=""
           for CANDIDATE in \
+            "result-pow-test/pow_test_functions.wasm" \
             "result/worker/server_bg.wasm" \
             "result/assets/pkg/client_bg.wasm"; do
             if [ -f "$CANDIDATE" ]; then
@@ -118,6 +122,7 @@ jobs:
             -H "Authorization: Bearer ${{ steps.oidc.outputs.oidc_token }}" \
             -F "file=@${{ steps.wasm.outputs.wasm_file }}" \
             -F "declared_sha256=${{ steps.wasm.outputs.wasm_sha256 }}" \
+            -F "version=${GITHUB_SHA}" \
             -F "dry_run=${DRY_RUN}")
 
           if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then

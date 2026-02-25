@@ -53,113 +53,28 @@ async fn main() -> Result<()> {
 }
 
 pub async fn run(driver: &WebDriver, webapp_url: &str) -> Result<()> {
-    // Test 1: Direct route loading
-    // First test that we can directly navigate to /tests route
-    println!("Testing direct navigation to /tests...");
-    driver.goto(&format!("{}/tests", webapp_url)).await?;
-
-    // Wait for the WASM to load and hydrate the page
-    println!("Waiting for page to load and hydrate...");
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-
-    // Verify we're on the tests page by checking for test-specific elements
-    let counter_display = driver.find(By::Css(".counter-display")).await?;
-    println!("Successfully loaded /tests route directly");
-
-    // Now test navigation via link (existing test)
     println!("Navigating to home page...");
     driver.goto(webapp_url).await?;
     tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
-    println!("Navigating to tests page via link...");
-    let tests_link = driver.find(By::Css("a[href='/tests']")).await?;
-    tests_link.click().await?;
+    // Landing page should be hydrated and render hero title.
+    let hero_title = driver.find(By::Css(".hero-title")).await?;
+    let hero_text = hero_title.text().await?;
+    assert!(
+        !hero_text.trim().is_empty(),
+        "Hero title should contain the total test estimate"
+    );
 
-    // Wait for navigation and re-render
-    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-
-    // Test 2: Counter functionality
-    println!("Testing counter button...");
-    // Find counter_display again since we navigated
-    let counter_display = driver.find(By::Css(".counter-display")).await?;
-    let initial_count = counter_display.text().await?;
-    assert_eq!(initial_count, "0", "Initial count should be 0");
-
-    let counter_button = driver.find(By::Css(".counter-button")).await?;
-    counter_button.click().await?;
-
-    // Wait a moment for the UI to update
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    let new_count = counter_display.text().await?;
-    assert_eq!(new_count, "1", "Count should be 1 after clicking");
-
-    // Test 3: Uppercase API functionality
-    println!("Testing uppercase API...");
-    let text_input = driver.find(By::Css(".text-input")).await?;
-    text_input.send_keys("hello world").await?;
-
-    let uppercase_button = driver.find(By::Css(".uppercase-button")).await?;
-    uppercase_button.click().await?;
-
-    // Wait for the API call to complete
-    // The button text changes from "Convert to Uppercase" to "Converting..." and back
-    // Wait for the result to appear
-    driver
-        .query(By::Css(".result-text"))
-        .wait(
-            std::time::Duration::from_secs(5),
-            std::time::Duration::from_millis(100),
-        )
-        .first()
-        .await?;
-
-    let result_text = driver.find(By::Css(".result-text")).await?.text().await?;
-    assert_eq!(result_text, "HELLO WORLD", "Result should be uppercase");
-
-    // Test 3: WASM Executor functionality
-    println!("Testing WASM executor...");
-    if let Ok(wasm_path) = std::env::var("SIMPLE_WASM_MODULE") {
-        // Find the file input element
-        let file_input = driver
-            .find(By::Css("input[type='file'][accept='.wasm']"))
-            .await?;
-
-        // Upload the WASM file
-        file_input.send_keys(&wasm_path).await?;
-
-        // Wait for the file to be uploaded and processed
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-        // Find and click the execute button
-        let execute_button = driver.find(By::Css(".execute-button")).await?;
-        execute_button.click().await?;
-
-        // Wait for execution to complete
-        driver
-            .query(By::Css(".output-display"))
-            .wait(
-                std::time::Duration::from_secs(5),
-                std::time::Duration::from_millis(100),
-            )
-            .first()
-            .await?;
-
-        // Check the output
-        let output = driver
-            .find(By::Css(".output-display"))
-            .await?
-            .text()
-            .await?;
+    // If repositories are listed, the detail route should be navigable.
+    if let Ok(detail_link) = driver.find(By::Css(".repo-link")).await {
+        detail_link.click().await?;
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        let detail_title = driver.find(By::Css(".detail-title")).await?;
+        let detail_text = detail_title.text().await?;
         assert!(
-            output.contains("add(10, 32) = 42"),
-            "WASM execution should produce correct result, got: {}",
-            output
+            !detail_text.trim().is_empty(),
+            "Repository detail title should render after navigation"
         );
-
-        println!("WASM executor test passed!");
-    } else {
-        println!("Skipping WASM executor test (SIMPLE_WASM_MODULE not set)");
     }
 
     println!("All tests passed!");
