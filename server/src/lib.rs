@@ -320,20 +320,6 @@ async fn ensure_schema(client: &tokio_postgres::Client) -> Result<()> {
             UNIQUE(wasm_file_id, function_name)
         );
 
-        ALTER TABLE wasm_files
-            ADD COLUMN IF NOT EXISTS r2_key TEXT;
-
-        ALTER TABLE wasm_functions
-            ADD COLUMN IF NOT EXISTS submitted_updates BIGINT NOT NULL DEFAULT 0;
-
-        ALTER TABLE wasm_functions
-            ADD COLUMN IF NOT EXISTS lowest_hash TEXT;
-
-        ALTER TABLE wasm_functions
-            ADD COLUMN IF NOT EXISTS lowest_seed TEXT;
-
-        ALTER TABLE wasm_functions
-            ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
         ",
         )
         .await
