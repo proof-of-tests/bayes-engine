@@ -1545,16 +1545,17 @@ async fn handle_ci_upload(mut req: Request, env: Env) -> Result<Response> {
 
     let mut persisted = false;
     let mut r2_key = None;
-
-    let client = match connect_to_db(&env).await {
-        Ok(client) => client,
-        Err(e) => return Response::error(format!("Failed to connect to database: {}", e), 500),
-    };
-    if let Err(e) = ensure_schema(&client).await {
-        return Response::error(format!("Failed to ensure schema: {}", e), 500);
-    }
+    let mut wasm_file_id = None;
 
     if !dry_run {
+        let client = match connect_to_db(&env).await {
+            Ok(client) => client,
+            Err(e) => return Response::error(format!("Failed to connect to database: {}", e), 500),
+        };
+        if let Err(e) = ensure_schema(&client).await {
+            return Response::error(format!("Failed to ensure schema: {}", e), 500);
+        }
+
         let storage_key = format!(
             "{}/{}/{}.wasm",
             claims.repository.replace('/', "__"),
@@ -1566,21 +1567,21 @@ async fn handle_ci_upload(mut req: Request, env: Env) -> Result<Response> {
         }
         persisted = true;
         r2_key = Some(storage_key);
-    }
 
-    let wasm_file_id = match insert_wasm_catalog(
-        &client,
-        &claims.repository,
-        &version,
-        &wasm_sha256,
-        r2_key.as_deref(),
-        &function_names,
-    )
-    .await
-    {
-        Ok((file_id, _)) => Some(file_id),
-        Err(err) => return to_worker_error(err),
-    };
+        wasm_file_id = match insert_wasm_catalog(
+            &client,
+            &claims.repository,
+            &version,
+            &wasm_sha256,
+            r2_key.as_deref(),
+            &function_names,
+        )
+        .await
+        {
+            Ok((file_id, _)) => Some(file_id),
+            Err(err) => return to_worker_error(err),
+        };
+    }
 
     let payload = CiUploadResponse {
         ok: true,
