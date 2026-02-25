@@ -1147,7 +1147,6 @@ fn build_repository_detail(
 
 async fn handle_list_repositories(env: Env) -> Result<Response> {
     let client = connect_to_db(&env).await?;
-    ensure_schema(&client).await?;
 
     let rows = client
         .query(
@@ -1229,7 +1228,6 @@ async fn handle_list_repositories(env: Env) -> Result<Response> {
 
 async fn handle_repository_detail(env: Env, repository: String) -> Result<Response> {
     let client = connect_to_db(&env).await?;
-    ensure_schema(&client).await?;
 
     let rows = client
         .query(
@@ -1300,7 +1298,6 @@ async fn handle_latest_catalog(env: Env, repository: String) -> Result<Response>
 
 async fn handle_get_wasm_file(env: Env, wasm_file_id: i64) -> Result<Response> {
     let client = connect_to_db(&env).await?;
-    ensure_schema(&client).await?;
 
     let row = client
         .query_opt(
