@@ -18,6 +18,10 @@ not_found_handling = "single-page-application"
 binding = "HYPERDRIVE"
 id = "a88d53af1e344d80bdd1ab8f88692b14"
 
+[[r2_buckets]]
+binding = "WASM_BUCKET"
+bucket_name = "bayes-engine-wasm"
+
 # Production environment - includes custom domain routes
 [env.production]
 routes = [
@@ -27,6 +31,10 @@ routes = [
 [[env.production.hyperdrive]]
 binding = "HYPERDRIVE"
 id = "a88d53af1e344d80bdd1ab8f88692b14"
+
+[[env.production.r2_buckets]]
+binding = "WASM_BUCKET"
+bucket_name = "bayes-engine-wasm"
 
 [env.production.assets]
 directory = "result/assets"
@@ -41,6 +49,10 @@ not_found_handling = "single-page-application"
 [[env.e2e.hyperdrive]]
 binding = "HYPERDRIVE"
 id = "a88d53af1e344d80bdd1ab8f88692b14"
+
+[[env.e2e.r2_buckets]]
+binding = "WASM_BUCKET"
+bucket_name = "bayes-engine-wasm"
 
 [env.e2e.assets]
 directory = "result/assets"

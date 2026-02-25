@@ -62,8 +62,8 @@
         commonArgs = {
           inherit src;
           strictDeps = true;
-          # Exclude e2e_tests and simple-component from the main build
-          cargoExtraArgs = "--workspace --exclude e2e_tests --exclude simple-wasm-module";
+          # Exclude e2e_tests and wasm-only helper crates from the main build
+          cargoExtraArgs = "--workspace --exclude e2e_tests --exclude simple-wasm-module --exclude pow-test-functions";
         };
 
         # Build the workspace
@@ -106,13 +106,37 @@
           '';
         };
 
+        # Build pow-test-functions separately as uploadable test WASM module
+        powTestFunctionsModule = craneLibWasm.buildPackage {
+          inherit src;
+          strictDeps = true;
+          pname = "pow-test-functions";
+          CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
+          cargoExtraArgs = "--package pow-test-functions";
+
+          cargoArtifacts = craneLibWasm.buildDepsOnly {
+            inherit src;
+            strictDeps = true;
+            CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
+            cargoExtraArgs = "--package pow-test-functions";
+          };
+
+          doCheck = false;
+          doNotPostBuildInstallCargoBinaries = true;
+
+          installPhaseCommand = ''
+            mkdir -p $out
+            cp target/wasm32-unknown-unknown/release/pow_test_functions.wasm $out/
+          '';
+        };
+
         # Common arguments for wasm builds
         commonArgsWasm = {
           inherit src;
           strictDeps = true;
           CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
-          # Exclude e2e_tests and simple-component from WASM builds (we build simple-component separately)
-          cargoExtraArgs = "--workspace --exclude e2e_tests --exclude simple-wasm-module";
+          # Exclude e2e_tests and standalone wasm helper crates (built separately)
+          cargoExtraArgs = "--workspace --exclude e2e_tests --exclude simple-wasm-module --exclude pow-test-functions";
         };
 
         # Step 1: Build WASM files (client and server) with cached dependencies
@@ -228,7 +252,7 @@
         packages = {
           default = cargoBuild;
           bayes-engine = cargoBuild;
-          inherit webapp wasmBuild e2eTests simpleWasmModule;
+          inherit webapp wasmBuild e2eTests simpleWasmModule powTestFunctionsModule;
         };
 
         apps = {

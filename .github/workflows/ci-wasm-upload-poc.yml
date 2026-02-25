@@ -32,6 +32,9 @@ jobs:
       - name: Build webapp
         run: nix build .#webapp
 
+      - name: Build PoW test WASM module
+        run: nix build .#powTestFunctionsModule --out-link result-pow-test
+
       - name: Prepare WASM metadata
         id: wasm
         shell: bash
@@ -40,6 +43,7 @@ jobs:
 
           WASM_FILE=""
           for CANDIDATE in \
+            "result-pow-test/pow_test_functions.wasm" \
             "result/worker/server_bg.wasm" \
             "result/assets/pkg/client_bg.wasm"; do
             if [ -f "$CANDIDATE" ]; then
@@ -96,9 +100,10 @@ jobs:
 
           for i in $(seq 1 30); do
             if curl -sS -o /dev/null "${PREVIEW_BASE}/content-hash.txt"; then
-              echo "Preview deployment is ready."
+              echo "Preview deployment is reachable."
               exit 0
             fi
+            echo "Preview not ready yet (attempt ${i}/30)."
             sleep 10
           done
 
@@ -111,17 +116,36 @@ jobs:
         run: |
           set -euo pipefail
 
-          HTTP_CODE=$(curl -sS \
-            -o upload-response.json \
-            -w "%{http_code}" \
-            -X POST "${UPLOAD_URL}" \
-            -H "Authorization: Bearer ${{ steps.oidc.outputs.oidc_token }}" \
-            -F "file=@${{ steps.wasm.outputs.wasm_file }}" \
-            -F "declared_sha256=${{ steps.wasm.outputs.wasm_sha256 }}" \
-            -F "dry_run=${DRY_RUN}")
+          UPLOAD_OK=false
+          for i in $(seq 1 30); do
+            HTTP_CODE=$(curl -sS \
+              -o upload-response.json \
+              -w "%{http_code}" \
+              -X POST "${UPLOAD_URL}" \
+              -H "Authorization: Bearer ${{ steps.oidc.outputs.oidc_token }}" \
+              -F "file=@${{ steps.wasm.outputs.wasm_file }}" \
+              -F "declared_sha256=${{ steps.wasm.outputs.wasm_sha256 }}" \
+              -F "version=${GITHUB_SHA}" \
+              -F "dry_run=${DRY_RUN}")
 
-          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+              UPLOAD_OK=true
+              break
+            fi
+
+            if [ "${DRY_RUN}" = "true" ] && { [ "$HTTP_CODE" = "404" ] || { [ "$HTTP_CODE" = "500" ] && grep -q "Failed to ensure schema" upload-response.json; }; }; then
+              echo "Upload endpoint still on stale preview (attempt ${i}/30, HTTP ${HTTP_CODE}), retrying..."
+              sleep 10
+              continue
+            fi
+
             echo "Upload request failed with HTTP ${HTTP_CODE}" >&2
+            cat upload-response.json >&2 || true
+            exit 1
+          done
+
+          if [ "${UPLOAD_OK}" != "true" ]; then
+            echo "Upload request did not succeed after retries" >&2
             cat upload-response.json >&2 || true
             exit 1
           fi
