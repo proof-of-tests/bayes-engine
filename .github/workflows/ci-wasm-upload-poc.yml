@@ -96,17 +96,20 @@ jobs:
           set -euo pipefail
 
           PREVIEW_BASE="https://bayes-engine-pr-${{ github.event.pull_request.number }}.lemmih.workers.dev"
-          echo "Waiting for preview deployment at ${PREVIEW_BASE}..."
+          EXPECTED_HASH="$(cat result/assets/content-hash.txt)"
+          echo "Waiting for preview deployment at ${PREVIEW_BASE} (expected content hash: ${EXPECTED_HASH})..."
 
-          for i in $(seq 1 30); do
-            if curl -sS -o /dev/null "${PREVIEW_BASE}/content-hash.txt"; then
-              echo "Preview deployment is ready."
+          for i in $(seq 1 60); do
+            REMOTE_HASH="$(curl -fsS "${PREVIEW_BASE}/content-hash.txt" || true)"
+            if [ -n "${REMOTE_HASH}" ] && [ "${REMOTE_HASH}" = "${EXPECTED_HASH}" ]; then
+              echo "Preview deployment is ready and matches this commit."
               exit 0
             fi
+            echo "Preview not ready yet (attempt ${i}/60). Current hash: ${REMOTE_HASH:-<unavailable>}"
             sleep 10
           done
 
-          echo "Preview deployment not ready after waiting." >&2
+          echo "Preview deployment did not reach expected content hash after waiting." >&2
           exit 1
 
       - name: Upload WASM to bayes.lemmih.com
