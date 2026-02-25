@@ -1147,7 +1147,6 @@ fn build_repository_detail(
 
 async fn handle_list_repositories(env: Env) -> Result<Response> {
     let client = connect_to_db(&env).await?;
-    ensure_schema(&client).await?;
 
     let rows = client
         .query(
@@ -1158,13 +1157,13 @@ async fn handle_list_repositories(env: Env) -> Result<Response> {
             to_char(wf.uploaded_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS uploaded_at,
             wf.id AS file_id,
             wf.file_sha256,
-            wf.r2_key,
+            to_jsonb(wf)->>'r2_key' AS r2_key,
             f.id AS function_id,
             f.function_name,
             f.hll_bits,
             f.hll_hashes_json,
-            f.submitted_updates,
-            f.lowest_hash
+            NULLIF(to_jsonb(f)->>'submitted_updates', '')::BIGINT AS submitted_updates,
+            to_jsonb(f)->>'lowest_hash' AS lowest_hash
         FROM repositories r
         JOIN repository_versions rv ON rv.repository_id = r.id
         JOIN wasm_files wf ON wf.repository_id = r.id AND wf.version_id = rv.id
@@ -1229,7 +1228,6 @@ async fn handle_list_repositories(env: Env) -> Result<Response> {
 
 async fn handle_repository_detail(env: Env, repository: String) -> Result<Response> {
     let client = connect_to_db(&env).await?;
-    ensure_schema(&client).await?;
 
     let rows = client
         .query(
@@ -1240,13 +1238,13 @@ async fn handle_repository_detail(env: Env, repository: String) -> Result<Respon
             to_char(wf.uploaded_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS uploaded_at,
             wf.id AS file_id,
             wf.file_sha256,
-            wf.r2_key,
+            to_jsonb(wf)->>'r2_key' AS r2_key,
             f.id AS function_id,
             f.function_name,
             f.hll_bits,
             f.hll_hashes_json,
-            f.submitted_updates,
-            f.lowest_hash
+            NULLIF(to_jsonb(f)->>'submitted_updates', '')::BIGINT AS submitted_updates,
+            to_jsonb(f)->>'lowest_hash' AS lowest_hash
         FROM repositories r
         JOIN repository_versions rv ON rv.repository_id = r.id
         JOIN wasm_files wf ON wf.repository_id = r.id AND wf.version_id = rv.id
@@ -1300,11 +1298,10 @@ async fn handle_latest_catalog(env: Env, repository: String) -> Result<Response>
 
 async fn handle_get_wasm_file(env: Env, wasm_file_id: i64) -> Result<Response> {
     let client = connect_to_db(&env).await?;
-    ensure_schema(&client).await?;
 
     let row = client
         .query_opt(
-            "SELECT r2_key FROM wasm_files WHERE id = $1",
+            "SELECT to_jsonb(wasm_files)->>'r2_key' AS r2_key FROM wasm_files WHERE id = $1",
             &[&wasm_file_id],
         )
         .await
@@ -1362,7 +1359,13 @@ async fn handle_submit_test_result(mut req: Request, env: Env) -> Result<Respons
     let row = client
         .query_opt(
             "
-        SELECT id, hll_bits, hll_hashes_json, submitted_updates, lowest_hash, lowest_seed
+        SELECT
+            id,
+            hll_bits,
+            hll_hashes_json,
+            COALESCE(NULLIF(to_jsonb(wasm_functions)->>'submitted_updates', '')::BIGINT, 0) AS submitted_updates,
+            to_jsonb(wasm_functions)->>'lowest_hash' AS lowest_hash,
+            to_jsonb(wasm_functions)->>'lowest_seed' AS lowest_seed
         FROM wasm_functions
         WHERE id = $1
         ",
@@ -1399,7 +1402,7 @@ async fn handle_submit_test_result(mut req: Request, env: Env) -> Result<Respons
         } else {
             (hash.to_string(), seed.to_string())
         };
-        client
+        let rich_update = client
             .execute(
                 "
             UPDATE wasm_functions
@@ -1419,8 +1422,22 @@ async fn handle_submit_test_result(mut req: Request, env: Env) -> Result<Respons
                     &body.function_id,
                 ],
             )
-            .await
-            .map_err(|e| Error::RustError(format!("Failed updating function HLL: {}", e)))?;
+            .await;
+
+        if rich_update.is_err() {
+            client
+                .execute(
+                    "UPDATE wasm_functions SET hll_hashes_json = $1 WHERE id = $2",
+                    &[&new_hll_json, &body.function_id],
+                )
+                .await
+                .map_err(|e| {
+                    Error::RustError(format!(
+                        "Failed updating function HLL (fallback mode): {}",
+                        e
+                    ))
+                })?;
+        }
     }
 
     json_response(
