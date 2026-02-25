@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 use dioxus_router::{Link, Routable, Router};
-use gloo_net::http::Request;
+use gloo_net::http::{Request, Response};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
@@ -77,6 +77,11 @@ struct UploadCatalogResponse {
     files: Vec<WasmFileSummary>,
 }
 
+#[derive(Deserialize)]
+struct ApiErrorPayload {
+    error: Option<String>,
+}
+
 #[derive(Serialize)]
 struct SubmitHashRequest {
     function_id: i64,
@@ -108,13 +113,23 @@ fn Home() -> Element {
 
     use_resource(move || async move {
         match Request::get("/api/repositories").send().await {
-            Ok(response) => match response.json::<RepositoryListResponse>().await {
-                Ok(payload) => {
-                    load_error.set(None);
-                    data.set(Some(payload));
+            Ok(response) => {
+                if !response.ok() {
+                    load_error.set(Some(
+                        api_error_message(response, "Failed loading repositories").await,
+                    ));
+                    return;
                 }
-                Err(err) => load_error.set(Some(format!("Failed decoding repositories: {err}"))),
-            },
+                match response.json::<RepositoryListResponse>().await {
+                    Ok(payload) => {
+                        load_error.set(None);
+                        data.set(Some(payload));
+                    }
+                    Err(err) => {
+                        load_error.set(Some(format!("Failed decoding repositories: {err}")))
+                    }
+                }
+            }
             Err(err) => load_error.set(Some(format!("Failed loading repositories: {err}"))),
         }
     });
@@ -202,13 +217,24 @@ fn Repo(owner: String, repo: String) -> Element {
             async move {
                 let url = format!("/api/repositories/{owner}/{repo}");
                 match Request::get(&url).send().await {
-                    Ok(response) => match response.json::<RepositoryDetailResponse>().await {
-                        Ok(payload) => {
-                            load_error.set(None);
-                            data.set(Some(payload));
+                    Ok(response) => {
+                        if !response.ok() {
+                            load_error.set(Some(
+                                api_error_message(response, "Failed loading repository detail")
+                                    .await,
+                            ));
+                            return;
                         }
-                        Err(err) => load_error.set(Some(format!("Failed decoding detail: {err}"))),
-                    },
+                        match response.json::<RepositoryDetailResponse>().await {
+                            Ok(payload) => {
+                                load_error.set(None);
+                                data.set(Some(payload));
+                            }
+                            Err(err) => {
+                                load_error.set(Some(format!("Failed decoding detail: {err}")))
+                            }
+                        }
+                    }
                     Err(err) => {
                         load_error.set(Some(format!("Failed loading repository detail: {err}")))
                     }
@@ -382,6 +408,9 @@ async fn load_latest_functions(repository: &str) -> Result<Vec<ExecutableFunctio
         .send()
         .await
         .map_err(|err| format!("Failed requesting latest catalog: {err}"))?;
+    if !response.ok() {
+        return Err(api_error_message(response, "Failed loading latest catalog").await);
+    }
     let catalog = response
         .json::<UploadCatalogResponse>()
         .await
@@ -390,10 +419,14 @@ async fn load_latest_functions(repository: &str) -> Result<Vec<ExecutableFunctio
     let mut executables = Vec::new();
     for file in catalog.files {
         let wasm_url = format!("/api/wasm-files/{}", file.id);
-        let wasm_bytes = Request::get(&wasm_url)
+        let response = Request::get(&wasm_url)
             .send()
             .await
-            .map_err(|err| format!("Failed downloading wasm {}: {err}", file.id))?
+            .map_err(|err| format!("Failed downloading wasm {}: {err}", file.id))?;
+        if !response.ok() {
+            return Err(api_error_message(response, "Failed downloading wasm bytes").await);
+        }
+        let wasm_bytes = response
             .binary()
             .await
             .map_err(|err| format!("Failed reading wasm bytes {}: {err}", file.id))?;
@@ -440,14 +473,29 @@ async fn submit_improvement(function_id: i64, seed: u64, hash: u64) -> Result<()
         hash: hash.to_string(),
     };
 
-    Request::post("/api/test-results")
+    let response = Request::post("/api/test-results")
         .json(&payload)
         .map_err(|err| format!("Failed encoding payload: {err}"))?
         .send()
         .await
         .map_err(|err| format!("Failed submitting update: {err}"))?;
+    if !response.ok() {
+        return Err(api_error_message(response, "Failed submitting update").await);
+    }
 
     Ok(())
+}
+
+async fn api_error_message(response: Response, fallback: &str) -> String {
+    let status = response.status();
+    if let Ok(payload) = response.json::<ApiErrorPayload>().await {
+        if let Some(error) = payload.error {
+            if !error.is_empty() {
+                return format!("{fallback}: {error}");
+            }
+        }
+    }
+    format!("{fallback} (HTTP {status})")
 }
 
 fn split_repo_name(repo: &str) -> (String, String) {

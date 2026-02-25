@@ -319,6 +319,21 @@ async fn ensure_schema(client: &tokio_postgres::Client) -> Result<()> {
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             UNIQUE(wasm_file_id, function_name)
         );
+
+        ALTER TABLE wasm_files
+            ADD COLUMN IF NOT EXISTS r2_key TEXT;
+
+        ALTER TABLE wasm_functions
+            ADD COLUMN IF NOT EXISTS submitted_updates BIGINT NOT NULL DEFAULT 0;
+
+        ALTER TABLE wasm_functions
+            ADD COLUMN IF NOT EXISTS lowest_hash TEXT;
+
+        ALTER TABLE wasm_functions
+            ADD COLUMN IF NOT EXISTS lowest_seed TEXT;
+
+        ALTER TABLE wasm_functions
+            ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
         ",
         )
         .await
@@ -1642,7 +1657,14 @@ async fn fetch(req: Request, env: Env, _ctx: worker::Context) -> Result<Response
             Response::from_json(&response)
         })
         .get_async("/api/repositories", |_req, ctx| async move {
-            handle_list_repositories(ctx.env).await
+            match handle_list_repositories(ctx.env).await {
+                Ok(response) => Ok(response),
+                Err(err) => error_response(
+                    500,
+                    "internal_error",
+                    format!("Failed listing repositories: {}", err),
+                ),
+            }
         })
         .get_async("/api/repositories/:owner/:repo", |_req, ctx| async move {
             let owner = ctx
@@ -1654,7 +1676,14 @@ async fn fetch(req: Request, env: Env, _ctx: worker::Context) -> Result<Response
                 .map(|value| value.to_string())
                 .unwrap_or_default();
             let repository = format!("{}/{}", owner, repo);
-            handle_repository_detail(ctx.env, repository).await
+            match handle_repository_detail(ctx.env, repository).await {
+                Ok(response) => Ok(response),
+                Err(err) => error_response(
+                    500,
+                    "internal_error",
+                    format!("Failed loading repository detail: {}", err),
+                ),
+            }
         })
         .get_async(
             "/api/repositories/:owner/:repo/latest-catalog",
@@ -1668,7 +1697,14 @@ async fn fetch(req: Request, env: Env, _ctx: worker::Context) -> Result<Response
                     .map(|value| value.to_string())
                     .unwrap_or_default();
                 let repository = format!("{}/{}", owner, repo);
-                handle_latest_catalog(ctx.env, repository).await
+                match handle_latest_catalog(ctx.env, repository).await {
+                    Ok(response) => Ok(response),
+                    Err(err) => error_response(
+                        500,
+                        "internal_error",
+                        format!("Failed loading latest catalog: {}", err),
+                    ),
+                }
             },
         )
         .get_async("/api/wasm-files/:id", |_req, ctx| async move {
