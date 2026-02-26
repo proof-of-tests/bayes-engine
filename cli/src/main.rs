@@ -254,6 +254,7 @@ fn create_engine() -> Result<Engine> {
     config.cranelift_opt_level(OptLevel::Speed);
     config.wasm_simd(true);
     config.strategy(wasmtime::Strategy::Cranelift);
+    config.epoch_interruption(true);
     Engine::new(&config).context("creating wasmtime engine")
 }
 
@@ -369,6 +370,7 @@ fn worker_loop(
     worker_id: usize,
 ) -> Result<()> {
     let mut store = Store::new(&engine, ());
+    store.set_epoch_deadline(1);
     let linker = Linker::new(&engine);
     let instance = linker
         .instantiate(&mut store, &module)
@@ -390,21 +392,28 @@ fn worker_loop(
                 break;
             }
             let seed = next_seed(&mut state);
-            if let Ok(hash) = typed.call(&mut store, seed) {
-                metrics.local_tests.fetch_add(1, Ordering::Relaxed);
-                if hll.add_hash(hash) {
-                    match tx.try_send(Submission {
-                        function_id: meta.id,
-                        wasm_file_id: meta.wasm_file_id,
-                        function_name: meta.name.clone(),
-                        seed,
-                        hash,
-                    }) {
-                        Ok(()) => {}
-                        Err(TrySendError::Full(_)) => {
-                            metrics.dropped_submissions.fetch_add(1, Ordering::Relaxed);
+            match typed.call(&mut store, seed) {
+                Ok(hash) => {
+                    metrics.local_tests.fetch_add(1, Ordering::Relaxed);
+                    if hll.add_hash(hash) {
+                        match tx.try_send(Submission {
+                            function_id: meta.id,
+                            wasm_file_id: meta.wasm_file_id,
+                            function_name: meta.name.clone(),
+                            seed,
+                            hash,
+                        }) {
+                            Ok(()) => {}
+                            Err(TrySendError::Full(_)) => {
+                                metrics.dropped_submissions.fetch_add(1, Ordering::Relaxed);
+                            }
+                            Err(TrySendError::Disconnected(_)) => return Ok(()),
                         }
-                        Err(TrySendError::Disconnected(_)) => return Ok(()),
+                    }
+                }
+                Err(_) => {
+                    if !running.load(Ordering::SeqCst) {
+                        return Ok(());
                     }
                 }
             }
@@ -539,6 +548,19 @@ fn main() -> Result<()> {
         thread::spawn(move || submission_loop(running, base_url, rx, metrics, initial_estimates))
     };
 
+    let epoch_thread = {
+        let running = running.clone();
+        let engine = engine.clone();
+        thread::spawn(move || {
+            while running.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(100));
+                engine.increment_epoch();
+            }
+            // Nudge one final time so any blocked call observes shutdown promptly.
+            engine.increment_epoch();
+        })
+    };
+
     let stats_thread = {
         let running = running.clone();
         let metrics = metrics.clone();
@@ -573,6 +595,7 @@ fn main() -> Result<()> {
     for worker in workers {
         let _ = worker.join();
     }
+    let _ = epoch_thread.join();
     let _ = submit_thread.join();
     let _ = stats_thread.join();
 
