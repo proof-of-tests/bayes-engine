@@ -34,6 +34,12 @@ jobs:
       - name: Build PoW test WASM module
         run: nix build .#powTestFunctionsModule --out-link result-pow-test
 
+      - name: Build wrangler
+        run: |
+          # Pre-build wrangler to ensure it's cached before running in background
+          # This avoids timeout issues when wrangler is not yet in the nix cache
+          nix run .#wrangler-dev -- --help > /dev/null 2>&1 || true
+
       - name: Prepare WASM metadata
         id: wasm
         shell: bash
