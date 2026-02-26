@@ -1,15 +1,19 @@
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use rand::prelude::SliceRandom;
-use reqwest::blocking::Client;
+use reqwest::blocking::Client as BlockingClient;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+use tokio::runtime::Builder as TokioRuntimeBuilder;
+use tokio::sync::mpsc as tokio_mpsc;
+use tokio::sync::mpsc::error::{
+    TryRecvError as TokioTryRecvError, TrySendError as TokioTrySendError,
+};
 use wasmtime::{Config, Engine, Linker, Module, OptLevel, Store, TypedFunc};
 
 #[derive(Parser, Debug)]
@@ -176,7 +180,7 @@ fn endpoint(base: &str, path: &str) -> String {
     )
 }
 
-fn fetch_target(client: &Client, base_url: &str) -> Result<Target> {
+fn fetch_target(client: &BlockingClient, base_url: &str) -> Result<Target> {
     let repos_url = endpoint(base_url, "/api/repositories");
     let repo_list = client
         .get(repos_url)
@@ -258,31 +262,34 @@ fn create_engine() -> Result<Engine> {
     Engine::new(&config).context("creating wasmtime engine")
 }
 
-fn submission_loop(
+async fn submission_loop_async(
     running: Arc<AtomicBool>,
     base_url: String,
-    rx: mpsc::Receiver<Submission>,
+    mut rx: tokio_mpsc::Receiver<Submission>,
     metrics: Arc<Metrics>,
     initial_estimates: HashMap<i64, f64>,
 ) {
-    let client = Client::builder()
+    let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(2))
         .timeout(Duration::from_secs(5))
         .build()
-        .unwrap_or_else(|_| Client::new());
+        .unwrap_or_else(|_| reqwest::Client::new());
     let submit_url = endpoint(&base_url, "/api/test-results");
     let mut last_estimate_by_function = initial_estimates;
 
     loop {
-        let submission = match rx.recv_timeout(Duration::from_millis(200)) {
-            Ok(item) => item,
-            Err(RecvTimeoutError::Timeout) => {
-                if !running.load(Ordering::SeqCst) {
+        let submission = if running.load(Ordering::SeqCst) {
+            match rx.recv().await {
+                Some(item) => item,
+                None => break,
+            }
+        } else {
+            match rx.try_recv() {
+                Ok(item) => item,
+                Err(TokioTryRecvError::Empty) | Err(TokioTryRecvError::Disconnected) => {
                     break;
                 }
-                continue;
             }
-            Err(RecvTimeoutError::Disconnected) => break,
         };
 
         let payload = SubmitHashRequest {
@@ -295,7 +302,7 @@ fn submission_loop(
 
         let mut submitted = false;
         for attempt in 1..=3 {
-            let send_result = client.post(&submit_url).json(&payload).send();
+            let send_result = client.post(&submit_url).json(&payload).send().await;
             let Ok(response) = send_result else {
                 if attempt == 3 {
                     metrics.failed_submissions.fetch_add(1, Ordering::Relaxed);
@@ -303,14 +310,17 @@ fn submission_loop(
                         *guard = "network error while submitting hash".to_string();
                     }
                 } else if running.load(Ordering::SeqCst) {
-                    thread::sleep(Duration::from_millis(100));
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                 }
                 continue;
             };
 
             let status = response.status();
             if !status.is_success() {
-                let body = response.text().unwrap_or_else(|_| "<no body>".to_string());
+                let body = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "<no body>".to_string());
                 if attempt == 3 || !(status.is_server_error() || status.as_u16() == 429) {
                     metrics.failed_submissions.fetch_add(1, Ordering::Relaxed);
                     if let Ok(mut guard) = metrics.last_error.lock() {
@@ -319,12 +329,12 @@ fn submission_loop(
                     break;
                 }
                 if running.load(Ordering::SeqCst) {
-                    thread::sleep(Duration::from_millis(100));
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                 }
                 continue;
             }
 
-            match response.json::<SubmitHashResponse>() {
+            match response.json::<SubmitHashResponse>().await {
                 Ok(parsed) => {
                     metrics.submitted_hashes.fetch_add(1, Ordering::Relaxed);
                     if parsed.improved {
@@ -347,7 +357,7 @@ fn submission_loop(
                             *guard = "submit succeeded but response JSON parse failed".to_string();
                         }
                     } else if running.load(Ordering::SeqCst) {
-                        thread::sleep(Duration::from_millis(100));
+                        tokio::time::sleep(Duration::from_millis(100)).await;
                     }
                 }
             }
@@ -361,7 +371,7 @@ fn submission_loop(
 
 fn worker_loop(
     running: Arc<AtomicBool>,
-    tx: SyncSender<Submission>,
+    tx: tokio_mpsc::Sender<Submission>,
     metrics: Arc<Metrics>,
     engine: Arc<Engine>,
     module: Arc<Module>,
@@ -404,10 +414,10 @@ fn worker_loop(
                             hash,
                         }) {
                             Ok(()) => {}
-                            Err(TrySendError::Full(_)) => {
+                            Err(TokioTrySendError::Full(_)) => {
                                 metrics.dropped_submissions.fetch_add(1, Ordering::Relaxed);
                             }
-                            Err(TrySendError::Disconnected(_)) => return Ok(()),
+                            Err(TokioTrySendError::Closed(_)) => return Ok(()),
                         }
                     }
                 }
@@ -500,7 +510,7 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let cores = args.cores.max(1);
 
-    let client = Client::builder()
+    let client = BlockingClient::builder()
         .pool_max_idle_per_host(16)
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(15))
@@ -519,7 +529,7 @@ fn main() -> Result<()> {
         initial_estimates.insert(f.id, f.estimated_tests);
     }
 
-    let (tx, rx) = mpsc::sync_channel::<Submission>(16_384);
+    let (tx, rx) = tokio_mpsc::channel::<Submission>(16_384);
 
     {
         let running = running.clone();
@@ -557,7 +567,19 @@ fn main() -> Result<()> {
         let running = running.clone();
         let metrics = metrics.clone();
         let base_url = args.base_url.clone();
-        thread::spawn(move || submission_loop(running, base_url, rx, metrics, initial_estimates))
+        thread::spawn(move || {
+            let runtime = TokioRuntimeBuilder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build tokio runtime for submit thread");
+            runtime.block_on(submission_loop_async(
+                running,
+                base_url,
+                rx,
+                metrics,
+                initial_estimates,
+            ));
+        })
     };
 
     let epoch_thread = {
