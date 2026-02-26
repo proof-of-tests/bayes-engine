@@ -67,6 +67,7 @@ struct WasmFileSummary {
 #[derive(Clone, Deserialize)]
 struct FunctionSummary {
     id: i64,
+    wasm_file_id: i64,
     name: String,
     estimated_tests: f64,
     submitted_updates: i64,
@@ -85,14 +86,42 @@ struct ApiErrorPayload {
 #[derive(Serialize)]
 struct SubmitHashRequest {
     function_id: i64,
+    wasm_file_id: Option<i64>,
+    function_name: Option<String>,
     seed: String,
     hash: String,
 }
 
 struct ExecutableFunction {
     function_id: i64,
+    wasm_file_id: i64,
     function_name: String,
     wasm_bytes: Vec<u8>,
+}
+
+struct LocalHyperLogLog {
+    bits: u8,
+    hashes: Vec<u64>,
+}
+
+impl LocalHyperLogLog {
+    fn new(bits: u8) -> Self {
+        let m = 1usize << bits;
+        Self {
+            bits,
+            hashes: vec![u64::MAX; m],
+        }
+    }
+
+    fn add_hash(&mut self, hash: u64) -> bool {
+        let mask = (1usize << self.bits) - 1;
+        let register = (hash as usize) & mask;
+        if hash < self.hashes[register] {
+            self.hashes[register] = hash;
+            return true;
+        }
+        false
+    }
 }
 
 #[wasm_bindgen]
@@ -333,7 +362,7 @@ fn RepoRunner(repository: String, latest_version: Option<String>) -> Element {
                     return;
                 }
 
-                let mut minima = HashMap::<i64, u64>::new();
+                let mut local_hll = HashMap::<i64, LocalHyperLogLog>::new();
                 let mut state = 0x1234_5678_abcd_ef01u64;
 
                 while is_running() {
@@ -357,13 +386,23 @@ fn RepoRunner(repository: String, latest_version: Option<String>) -> Element {
                             }
                         };
 
-                        let best = minima.entry(executable.function_id).or_insert(u64::MAX);
-                        if hash < *best {
-                            *best = hash;
+                        let hll = local_hll
+                            .entry(executable.function_id)
+                            .or_insert_with(|| LocalHyperLogLog::new(12));
+                        if hll.add_hash(hash) {
                             improvements += 1;
                             let function_id = executable.function_id;
+                            let wasm_file_id = executable.wasm_file_id;
+                            let function_name = executable.function_name.clone();
                             spawn(async move {
-                                let _ = submit_improvement(function_id, seed, hash).await;
+                                let _ = submit_improvement(
+                                    function_id,
+                                    wasm_file_id,
+                                    function_name,
+                                    seed,
+                                    hash,
+                                )
+                                .await;
                             });
                         }
                     }
@@ -441,6 +480,7 @@ async fn load_latest_functions(repository: &str) -> Result<Vec<ExecutableFunctio
             })?;
             executables.push(ExecutableFunction {
                 function_id: function.id,
+                wasm_file_id: function.wasm_file_id,
                 function_name: function.name,
                 wasm_bytes: wasm_bytes.clone(),
             });
@@ -466,9 +506,17 @@ fn execute_function_once(wasm_bytes: &[u8], function_name: &str, seed: u64) -> R
         .map_err(|err| format!("function call failed: {err}"))
 }
 
-async fn submit_improvement(function_id: i64, seed: u64, hash: u64) -> Result<(), String> {
+async fn submit_improvement(
+    function_id: i64,
+    wasm_file_id: i64,
+    function_name: String,
+    seed: u64,
+    hash: u64,
+) -> Result<(), String> {
     let payload = SubmitHashRequest {
         function_id,
+        wasm_file_id: Some(wasm_file_id),
+        function_name: Some(function_name),
         seed: seed.to_string(),
         hash: hash.to_string(),
     };

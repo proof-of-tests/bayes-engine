@@ -143,6 +143,10 @@ struct RepositoryDetailResponse {
 #[derive(Deserialize)]
 struct SubmitHashRequest {
     function_id: i64,
+    #[serde(default)]
+    wasm_file_id: Option<i64>,
+    #[serde(default)]
+    function_name: Option<String>,
     seed: String,
     hash: String,
 }
@@ -1342,7 +1346,8 @@ async fn handle_submit_test_result(mut req: Request, env: Env) -> Result<Respons
     let client = connect_to_db(&env).await?;
     ensure_schema(&client).await?;
 
-    let row = client
+    let mut function_id = body.function_id;
+    let mut row = client
         .query_opt(
             "
         SELECT
@@ -1355,10 +1360,81 @@ async fn handle_submit_test_result(mut req: Request, env: Env) -> Result<Respons
         FROM wasm_functions
         WHERE id = $1
         ",
-            &[&body.function_id],
+            &[&function_id],
         )
         .await
         .map_err(|e| Error::RustError(format!("Failed querying function HLL: {}", e)))?;
+
+    if row.is_none() {
+        if let (Some(wasm_file_id), Some(function_name)) =
+            (body.wasm_file_id, body.function_name.as_ref())
+        {
+            let name = function_name.trim();
+            if !name.is_empty() {
+                let file_row = client
+                    .query_opt(
+                        "SELECT repository_id, version_id FROM wasm_files WHERE id = $1",
+                        &[&wasm_file_id],
+                    )
+                    .await
+                    .map_err(|e| {
+                        Error::RustError(format!("Failed querying wasm file metadata: {}", e))
+                    })?;
+
+                if let Some(file_row) = file_row {
+                    let repository_id: i64 = file_row.get("repository_id");
+                    let version_id: i64 = file_row.get("version_id");
+                    let default_hll = HyperLogLogState::new(HLL_BITS).to_json();
+
+                    let upsert_row = client
+                        .query_one(
+                            "
+                        INSERT INTO wasm_functions (
+                            wasm_file_id, repository_id, version_id, function_name, hll_bits, hll_hashes_json
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                        ON CONFLICT (wasm_file_id, function_name)
+                        DO UPDATE SET function_name = EXCLUDED.function_name
+                        RETURNING id
+                        ",
+                            &[
+                                &wasm_file_id,
+                                &repository_id,
+                                &version_id,
+                                &name,
+                                &(HLL_BITS as i32),
+                                &default_hll,
+                            ],
+                        )
+                        .await
+                        .map_err(|e| {
+                            Error::RustError(format!("Failed upserting function metadata: {}", e))
+                        })?;
+
+                    function_id = upsert_row.get(0);
+                    row = client
+                        .query_opt(
+                            "
+                        SELECT
+                            id,
+                            hll_bits,
+                            hll_hashes_json,
+                            COALESCE(NULLIF(to_jsonb(wasm_functions)->>'submitted_updates', '')::BIGINT, 0) AS submitted_updates,
+                            to_jsonb(wasm_functions)->>'lowest_hash' AS lowest_hash,
+                            to_jsonb(wasm_functions)->>'lowest_seed' AS lowest_seed
+                        FROM wasm_functions
+                        WHERE id = $1
+                        ",
+                            &[&function_id],
+                        )
+                        .await
+                        .map_err(|e| {
+                            Error::RustError(format!("Failed querying function HLL: {}", e))
+                        })?;
+                }
+            }
+        }
+    }
 
     let Some(row) = row else {
         return error_response(404, "function_not_found", "Function ID not found");
@@ -1405,7 +1481,7 @@ async fn handle_submit_test_result(mut req: Request, env: Env) -> Result<Respons
                     &next_updates,
                     &lowest_hash,
                     &lowest_seed,
-                    &body.function_id,
+                    &function_id,
                 ],
             )
             .await;
@@ -1414,7 +1490,7 @@ async fn handle_submit_test_result(mut req: Request, env: Env) -> Result<Respons
             client
                 .execute(
                     "UPDATE wasm_functions SET hll_hashes_json = $1 WHERE id = $2",
-                    &[&new_hll_json, &body.function_id],
+                    &[&new_hll_json, &function_id],
                 )
                 .await
                 .map_err(|e| {
