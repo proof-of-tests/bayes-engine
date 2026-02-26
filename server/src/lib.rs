@@ -1614,12 +1614,20 @@ async fn handle_ci_upload(mut req: Request, env: Env) -> Result<Response> {
 
     let event_allowed = claims.event_name == "push"
         || claims.event_name == "workflow_dispatch"
-        || claims.event_name == "pull_request";
+        || (claims.event_name == "pull_request" && dry_run);
     if !event_allowed {
         return error_response(
             403,
             "event_not_allowed",
-            "Only push/workflow_dispatch/pull_request events are accepted",
+            "Only push/workflow_dispatch events are accepted, or pull_request when dry_run=true",
+        );
+    }
+
+    if claims.event_name == "pull_request" && !dry_run {
+        return error_response(
+            403,
+            "dry_run_required",
+            "pull_request uploads must set dry_run=true",
         );
     }
 

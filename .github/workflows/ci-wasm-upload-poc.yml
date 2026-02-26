@@ -133,7 +133,8 @@ jobs:
             -H "Authorization: Bearer ${{ steps.oidc.outputs.oidc_token }}" \
             -F "file=@${{ steps.wasm.outputs.wasm_file }}" \
             -F "declared_sha256=${{ steps.wasm.outputs.wasm_sha256 }}" \
-            -F "version=${GITHUB_SHA}")
+            -F "version=${GITHUB_SHA}" \
+            -F "dry_run=true")
 
           if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
             echo "Upload succeeded with HTTP $HTTP_CODE"
