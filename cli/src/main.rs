@@ -299,6 +299,22 @@ fn create_engine() -> Result<Engine> {
     Engine::new(&config).context("creating wasmtime engine")
 }
 
+async fn with_shutdown<T>(
+    shutdown: &Shutdown,
+    fut: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    tokio::select! {
+        _ = shutdown.token.cancelled() => None,
+        result = fut => Some(result),
+    }
+}
+
+async fn backoff_or_stop(shutdown: &Shutdown, duration: Duration) -> bool {
+    with_shutdown(shutdown, tokio::time::sleep(duration))
+        .await
+        .is_some()
+}
+
 async fn submission_loop_async(
     shutdown: Arc<Shutdown>,
     base_url: String,
@@ -315,12 +331,11 @@ async fn submission_loop_async(
     let mut last_estimate_by_function = initial_estimates;
 
     loop {
-        let submission = tokio::select! {
-            _ = shutdown.token.cancelled() => break,
-            next = rx.recv() => match next {
-                Some(item) => item,
-                None => break,
-            },
+        let Some(next) = with_shutdown(&shutdown, rx.recv()).await else {
+            break;
+        };
+        let Some(submission) = next else {
+            break;
         };
 
         let payload = SubmitHashRequest {
@@ -333,9 +348,10 @@ async fn submission_loop_async(
 
         let mut submitted = false;
         for attempt in 1..=3 {
-            let send_result = tokio::select! {
-                _ = shutdown.token.cancelled() => break,
-                result = client.post(&submit_url).json(&payload).send() => result,
+            let Some(send_result) =
+                with_shutdown(&shutdown, client.post(&submit_url).json(&payload).send()).await
+            else {
+                break;
             };
             let Ok(response) = send_result else {
                 if attempt == 3 {
@@ -344,9 +360,8 @@ async fn submission_loop_async(
                         *guard = "network error while submitting hash".to_string();
                     }
                 } else {
-                    tokio::select! {
-                        _ = shutdown.token.cancelled() => break,
-                        _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                    if !backoff_or_stop(&shutdown, Duration::from_millis(100)).await {
+                        break;
                     }
                 }
                 continue;
@@ -354,10 +369,10 @@ async fn submission_loop_async(
 
             let status = response.status();
             if !status.is_success() {
-                let body = tokio::select! {
-                    _ = shutdown.token.cancelled() => break,
-                    result = response.text() => result.unwrap_or_else(|_| "<no body>".to_string()),
+                let Some(body_result) = with_shutdown(&shutdown, response.text()).await else {
+                    break;
                 };
+                let body = body_result.unwrap_or_else(|_| "<no body>".to_string());
                 if attempt == 3 || !(status.is_server_error() || status.as_u16() == 429) {
                     metrics.failed_submissions.fetch_add(1, Ordering::Relaxed);
                     if let Ok(mut guard) = metrics.last_error.lock() {
@@ -365,16 +380,16 @@ async fn submission_loop_async(
                     }
                     break;
                 }
-                tokio::select! {
-                    _ = shutdown.token.cancelled() => break,
-                    _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                if !backoff_or_stop(&shutdown, Duration::from_millis(100)).await {
+                    break;
                 }
                 continue;
             }
 
-            let parsed_result = tokio::select! {
-                _ = shutdown.token.cancelled() => break,
-                result = response.json::<SubmitHashResponse>() => result,
+            let Some(parsed_result) =
+                with_shutdown(&shutdown, response.json::<SubmitHashResponse>()).await
+            else {
+                break;
             };
 
             match parsed_result {
@@ -400,9 +415,8 @@ async fn submission_loop_async(
                             *guard = "submit succeeded but response JSON parse failed".to_string();
                         }
                     } else {
-                        tokio::select! {
-                            _ = shutdown.token.cancelled() => break,
-                            _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                        if !backoff_or_stop(&shutdown, Duration::from_millis(100)).await {
+                            break;
                         }
                     }
                 }
