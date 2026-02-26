@@ -1344,7 +1344,6 @@ async fn handle_submit_test_result(mut req: Request, env: Env) -> Result<Respons
     };
 
     let client = connect_to_db(&env).await?;
-    ensure_schema(&client).await?;
 
     let mut function_id = body.function_id;
     let mut row = client
