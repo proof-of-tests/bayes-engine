@@ -11,9 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tokio::runtime::Builder as TokioRuntimeBuilder;
 use tokio::sync::mpsc as tokio_mpsc;
-use tokio::sync::mpsc::error::{
-    TryRecvError as TokioTryRecvError, TrySendError as TokioTrySendError,
-};
+use tokio::sync::mpsc::error::TrySendError as TokioTrySendError;
 use wasmtime::{Config, Engine, Linker, Module, OptLevel, Store, TypedFunc};
 
 #[derive(Parser, Debug)]
@@ -278,18 +276,13 @@ async fn submission_loop_async(
     let mut last_estimate_by_function = initial_estimates;
 
     loop {
-        let submission = if running.load(Ordering::SeqCst) {
-            match rx.recv().await {
-                Some(item) => item,
-                None => break,
-            }
-        } else {
-            match rx.try_recv() {
-                Ok(item) => item,
-                Err(TokioTryRecvError::Empty) | Err(TokioTryRecvError::Disconnected) => {
-                    break;
-                }
-            }
+        if !running.load(Ordering::SeqCst) {
+            break;
+        }
+
+        let submission = match rx.recv().await {
+            Some(item) => item,
+            None => break,
         };
 
         let payload = SubmitHashRequest {
@@ -444,8 +437,15 @@ fn stats_loop(
     let mut last_time = Instant::now();
 
     while running.load(Ordering::SeqCst) {
-        thread::sleep(Duration::from_secs(1));
+        thread::sleep(Duration::from_millis(100));
+        if !running.load(Ordering::SeqCst) {
+            break;
+        }
+
         let now = Instant::now();
+        if now.duration_since(last_time) < Duration::from_secs(1) {
+            continue;
+        }
 
         let local_tests = metrics.local_tests.load(Ordering::Relaxed);
         let submitted = metrics.submitted_hashes.load(Ordering::Relaxed);
