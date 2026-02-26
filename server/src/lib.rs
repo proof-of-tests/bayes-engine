@@ -167,20 +167,6 @@ struct UploadCatalogResponse {
     files: Vec<WasmFileSummary>,
 }
 
-#[derive(Serialize)]
-struct FunctionHllStateResponse {
-    function_id: i64,
-    function_name: String,
-    hll_bits: u8,
-    hashes: Vec<String>,
-}
-
-#[derive(Serialize)]
-struct WasmFileHllStateResponse {
-    wasm_file_id: i64,
-    functions: Vec<FunctionHllStateResponse>,
-}
-
 #[derive(Debug)]
 struct ApiError {
     status: u16,
@@ -1351,55 +1337,6 @@ async fn handle_get_wasm_file(env: Env, wasm_file_id: i64) -> Result<Response> {
         .from_bytes(bytes)
 }
 
-async fn handle_get_wasm_file_hll_state(env: Env, wasm_file_id: i64) -> Result<Response> {
-    let client = connect_to_db(&env).await?;
-
-    let rows = client
-        .query(
-            "
-        SELECT
-            id,
-            function_name,
-            hll_bits,
-            hll_hashes_json
-        FROM wasm_functions
-        WHERE wasm_file_id = $1
-        ORDER BY id ASC
-        ",
-            &[&wasm_file_id],
-        )
-        .await
-        .map_err(|e| Error::RustError(format!("Failed querying wasm function HLL state: {}", e)))?;
-
-    if rows.is_empty() {
-        return error_response(404, "not_found", "WASM file has no registered functions");
-    }
-
-    let mut functions = Vec::with_capacity(rows.len());
-    for row in rows {
-        let function_id: i64 = row.get("id");
-        let function_name: String = row.get("function_name");
-        let hll_bits: i32 = row.get("hll_bits");
-        let hll_hashes_json: String = row.get("hll_hashes_json");
-        let hll = HyperLogLogState::from_json(hll_bits as u8, &hll_hashes_json);
-        let hashes = hll.hashes.iter().map(|v| v.to_string()).collect();
-        functions.push(FunctionHllStateResponse {
-            function_id,
-            function_name,
-            hll_bits: hll_bits as u8,
-            hashes,
-        });
-    }
-
-    json_response(
-        200,
-        &WasmFileHllStateResponse {
-            wasm_file_id,
-            functions,
-        },
-    )
-}
-
 async fn handle_submit_test_result(mut req: Request, env: Env) -> Result<Response> {
     let body: SubmitHashRequest = req
         .json()
@@ -1415,7 +1352,6 @@ async fn handle_submit_test_result(mut req: Request, env: Env) -> Result<Respons
     };
 
     let client = connect_to_db(&env).await?;
-    ensure_schema(&client).await?;
 
     let mut function_id = body.function_id;
     let mut row = client
@@ -1867,13 +1803,6 @@ async fn fetch(req: Request, env: Env, _ctx: worker::Context) -> Result<Response
                 None => return error_response(400, "invalid_id", "Invalid wasm file id"),
             };
             handle_get_wasm_file(ctx.env, id).await
-        })
-        .get_async("/api/wasm-files/:id/hll-state", |_req, ctx| async move {
-            let id = match ctx.param("id").and_then(|value| value.parse::<i64>().ok()) {
-                Some(value) => value,
-                None => return error_response(400, "invalid_id", "Invalid wasm file id"),
-            };
-            handle_get_wasm_file_hll_state(ctx.env, id).await
         })
         .post_async("/api/test-results", |req, ctx| async move {
             match handle_submit_test_result(req, ctx.env).await {
