@@ -333,7 +333,10 @@ async fn submission_loop_async(
 
         let mut submitted = false;
         for attempt in 1..=3 {
-            let send_result = client.post(&submit_url).json(&payload).send().await;
+            let send_result = tokio::select! {
+                _ = shutdown.token.cancelled() => break,
+                result = client.post(&submit_url).json(&payload).send() => result,
+            };
             let Ok(response) = send_result else {
                 if attempt == 3 {
                     metrics.failed_submissions.fetch_add(1, Ordering::Relaxed);
@@ -351,10 +354,10 @@ async fn submission_loop_async(
 
             let status = response.status();
             if !status.is_success() {
-                let body = response
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "<no body>".to_string());
+                let body = tokio::select! {
+                    _ = shutdown.token.cancelled() => break,
+                    result = response.text() => result.unwrap_or_else(|_| "<no body>".to_string()),
+                };
                 if attempt == 3 || !(status.is_server_error() || status.as_u16() == 429) {
                     metrics.failed_submissions.fetch_add(1, Ordering::Relaxed);
                     if let Ok(mut guard) = metrics.last_error.lock() {
@@ -369,7 +372,12 @@ async fn submission_loop_async(
                 continue;
             }
 
-            match response.json::<SubmitHashResponse>().await {
+            let parsed_result = tokio::select! {
+                _ = shutdown.token.cancelled() => break,
+                result = response.json::<SubmitHashResponse>() => result,
+            };
+
+            match parsed_result {
                 Ok(parsed) => {
                     metrics.submitted_hashes.fetch_add(1, Ordering::Relaxed);
                     if parsed.improved {
