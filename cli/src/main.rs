@@ -10,8 +10,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tokio::runtime::Builder as TokioRuntimeBuilder;
-use tokio::sync::mpsc as tokio_mpsc;
-use tokio::sync::mpsc::error::TrySendError as TokioTrySendError;
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use wasmtime::{Config, Engine, Linker, Module, OptLevel, Store, TypedFunc};
 
@@ -84,9 +83,11 @@ struct Target {
 
 #[derive(Debug)]
 struct Submission {
+    slot_index: usize,
     function_id: i64,
     wasm_file_id: i64,
     function_name: String,
+    register: usize,
     seed: u64,
     hash: u64,
 }
@@ -96,7 +97,6 @@ struct Metrics {
     local_tests: AtomicU64,
     submitted_hashes: AtomicU64,
     failed_submissions: AtomicU64,
-    dropped_submissions: AtomicU64,
     estimate_gain_bits: AtomicU64,
     last_error: Mutex<String>,
 }
@@ -161,6 +161,110 @@ impl Shutdown {
         }
         if let Ok(guard) = self.wait_mutex.lock() {
             let _ = self.wait_cvar.wait_timeout(guard, duration);
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct HashSample {
+    hash: u64,
+    seed: u64,
+}
+
+struct FunctionSlotState {
+    local: Vec<HashSample>,
+    server: Vec<u64>,
+}
+
+struct FunctionSlot {
+    meta: FunctionSummary,
+    state: Mutex<FunctionSlotState>,
+}
+
+struct SubmissionState {
+    bits: u8,
+    slots: Vec<Arc<FunctionSlot>>,
+    notify: Notify,
+}
+
+impl SubmissionState {
+    fn new(bits: u8, functions: Vec<FunctionSummary>) -> Self {
+        let registers = 1usize << bits;
+        let empty = HashSample {
+            hash: u64::MAX,
+            seed: 0,
+        };
+        let slots = functions
+            .into_iter()
+            .map(|meta| {
+                Arc::new(FunctionSlot {
+                    meta,
+                    state: Mutex::new(FunctionSlotState {
+                        local: vec![empty; registers],
+                        server: vec![u64::MAX; registers],
+                    }),
+                })
+            })
+            .collect();
+        Self {
+            bits,
+            slots,
+            notify: Notify::new(),
+        }
+    }
+
+    fn register_for_hash(&self, hash: u64) -> usize {
+        let mask = (1usize << self.bits) - 1;
+        (hash as usize) & mask
+    }
+
+    fn update_local(&self, slot: &Arc<FunctionSlot>, hash: u64, seed: u64) {
+        let register = self.register_for_hash(hash);
+        if let Ok(mut guard) = slot.state.lock() {
+            if hash < guard.local[register].hash {
+                guard.local[register] = HashSample { hash, seed };
+                if hash < guard.server[register] {
+                    self.notify.notify_one();
+                }
+            }
+        }
+    }
+
+    fn next_submission(&self) -> Option<Submission> {
+        let mut best: Option<Submission> = None;
+        for (slot_index, slot) in self.slots.iter().enumerate() {
+            let Ok(guard) = slot.state.lock() else {
+                continue;
+            };
+            for (register, local_sample) in guard.local.iter().enumerate() {
+                if local_sample.hash >= guard.server[register] {
+                    continue;
+                }
+                let candidate = Submission {
+                    slot_index,
+                    function_id: slot.meta.id,
+                    wasm_file_id: slot.meta.wasm_file_id,
+                    function_name: slot.meta.name.clone(),
+                    register,
+                    seed: local_sample.seed,
+                    hash: local_sample.hash,
+                };
+                match &best {
+                    Some(current) if candidate.hash >= current.hash => {}
+                    _ => best = Some(candidate),
+                }
+            }
+        }
+        best
+    }
+
+    fn mark_server_seen(&self, slot_index: usize, register: usize, hash: u64) {
+        if let Some(slot) = self.slots.get(slot_index) {
+            if let Ok(mut guard) = slot.state.lock() {
+                if hash < guard.server[register] {
+                    guard.server[register] = hash;
+                }
+            }
         }
     }
 }
@@ -318,7 +422,7 @@ async fn backoff_or_stop(shutdown: &Shutdown, duration: Duration) -> bool {
 async fn submission_loop_async(
     shutdown: Arc<Shutdown>,
     base_url: String,
-    mut rx: tokio_mpsc::Receiver<Submission>,
+    submission_state: Arc<SubmissionState>,
     metrics: Arc<Metrics>,
     initial_estimates: HashMap<i64, f64>,
 ) {
@@ -331,11 +435,15 @@ async fn submission_loop_async(
     let mut last_estimate_by_function = initial_estimates;
 
     loop {
-        let Some(next) = with_shutdown(&shutdown, rx.recv()).await else {
-            break;
-        };
-        let Some(submission) = next else {
-            break;
+        let submission = match submission_state.next_submission() {
+            Some(next) => next,
+            None => {
+                let Some(_) = with_shutdown(&shutdown, submission_state.notify.notified()).await
+                else {
+                    break;
+                };
+                continue;
+            }
         };
 
         let payload = SubmitHashRequest {
@@ -405,6 +513,11 @@ async fn submission_loop_async(
                         last_estimate_by_function
                             .insert(submission.function_id, parsed.estimated_tests);
                     }
+                    submission_state.mark_server_seen(
+                        submission.slot_index,
+                        submission.register,
+                        submission.hash,
+                    );
                     submitted = true;
                     break;
                 }
@@ -431,11 +544,11 @@ async fn submission_loop_async(
 
 fn worker_loop(
     shutdown: Arc<Shutdown>,
-    tx: tokio_mpsc::Sender<Submission>,
+    submission_state: Arc<SubmissionState>,
     metrics: Arc<Metrics>,
     engine: Arc<Engine>,
     module: Arc<Module>,
-    functions: Vec<FunctionSummary>,
+    slots: Vec<Arc<FunctionSlot>>,
     hll_bits: u8,
     worker_id: usize,
 ) -> Result<()> {
@@ -446,18 +559,18 @@ fn worker_loop(
         .instantiate(&mut store, &module)
         .context("instantiating module")?;
 
-    let mut funcs: Vec<(FunctionSummary, TypedFunc<u64, u64>, LocalHyperLogLog)> = Vec::new();
-    for f in functions {
+    let mut funcs: Vec<(Arc<FunctionSlot>, TypedFunc<u64, u64>, LocalHyperLogLog)> = Vec::new();
+    for slot in slots {
         let typed = instance
-            .get_typed_func::<u64, u64>(&mut store, &f.name)
-            .with_context(|| format!("resolving function {}", f.name))?;
-        funcs.push((f, typed, LocalHyperLogLog::new(hll_bits)));
+            .get_typed_func::<u64, u64>(&mut store, &slot.meta.name)
+            .with_context(|| format!("resolving function {}", slot.meta.name))?;
+        funcs.push((slot, typed, LocalHyperLogLog::new(hll_bits)));
     }
 
     let mut state = splitmix64(0x1234_5678_abcd_ef01u64 ^ worker_id as u64);
 
     while !shutdown.is_requested() {
-        for (meta, typed, hll) in &mut funcs {
+        for (slot, typed, hll) in &mut funcs {
             if shutdown.is_requested() {
                 break;
             }
@@ -466,19 +579,7 @@ fn worker_loop(
                 Ok(hash) => {
                     metrics.local_tests.fetch_add(1, Ordering::Relaxed);
                     if hll.add_hash(hash) {
-                        match tx.try_send(Submission {
-                            function_id: meta.id,
-                            wasm_file_id: meta.wasm_file_id,
-                            function_name: meta.name.clone(),
-                            seed,
-                            hash,
-                        }) {
-                            Ok(()) => {}
-                            Err(TokioTrySendError::Full(_)) => {
-                                metrics.dropped_submissions.fetch_add(1, Ordering::Relaxed);
-                            }
-                            Err(TokioTrySendError::Closed(_)) => return Ok(()),
-                        }
+                        submission_state.update_local(slot, hash, seed);
                     }
                 }
                 Err(_) => {
@@ -513,7 +614,6 @@ fn stats_loop(
         let local_tests = metrics.local_tests.load(Ordering::Relaxed);
         let submitted = metrics.submitted_hashes.load(Ordering::Relaxed);
         let failed = metrics.failed_submissions.load(Ordering::Relaxed);
-        let dropped = metrics.dropped_submissions.load(Ordering::Relaxed);
         let estimate_gain = metrics.estimate_gain();
         let last_error = metrics
             .last_error
@@ -540,7 +640,6 @@ fn stats_loop(
             estimate_gain
         );
         println!("failed submissions: {failed}");
-        println!("dropped submissions (queue full): {dropped}");
         if !last_error.is_empty() {
             println!("last submit error: {last_error}");
         }
@@ -586,13 +685,15 @@ fn main() -> Result<()> {
 
     let metrics = Arc::new(Metrics::default());
     let shutdown = Arc::new(Shutdown::new());
+    let submission_state = Arc::new(SubmissionState::new(
+        args.hll_bits,
+        target.functions.clone(),
+    ));
 
     let mut initial_estimates = HashMap::new();
     for f in &target.functions {
         initial_estimates.insert(f.id, f.estimated_tests);
     }
-
-    let (tx, rx) = tokio_mpsc::channel::<Submission>(16_384);
 
     {
         let shutdown = shutdown.clone();
@@ -616,6 +717,7 @@ fn main() -> Result<()> {
 
     let submit_thread = {
         let shutdown = shutdown.clone();
+        let submission_state = submission_state.clone();
         let metrics = metrics.clone();
         let base_url = args.base_url.clone();
         thread::spawn(move || {
@@ -626,7 +728,7 @@ fn main() -> Result<()> {
             runtime.block_on(submission_loop_async(
                 shutdown,
                 base_url,
-                rx,
+                submission_state,
                 metrics,
                 initial_estimates,
             ));
@@ -659,18 +761,26 @@ fn main() -> Result<()> {
 
     let errors = Arc::new(Mutex::new(Vec::<String>::new()));
     let mut workers = Vec::new();
+    let slots = submission_state.slots.clone();
     for worker_id in 0..cores {
         let shutdown = shutdown.clone();
-        let tx = tx.clone();
+        let submission_state = submission_state.clone();
         let metrics = metrics.clone();
         let engine = engine.clone();
         let module = module.clone();
-        let functions = target.functions.clone();
+        let worker_slots = slots.clone();
         let errors = errors.clone();
         let hll_bits = args.hll_bits;
         workers.push(thread::spawn(move || {
             if let Err(err) = worker_loop(
-                shutdown, tx, metrics, engine, module, functions, hll_bits, worker_id,
+                shutdown,
+                submission_state,
+                metrics,
+                engine,
+                module,
+                worker_slots,
+                hll_bits,
+                worker_id,
             ) {
                 if let Ok(mut guard) = errors.lock() {
                     guard.push(format!("worker {worker_id}: {err}"));
@@ -678,7 +788,6 @@ fn main() -> Result<()> {
             }
         }));
     }
-    drop(tx);
 
     for worker in workers {
         let _ = worker.join();
