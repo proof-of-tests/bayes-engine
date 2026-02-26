@@ -4,7 +4,7 @@ use rand::prelude::SliceRandom;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
@@ -264,7 +264,11 @@ fn submission_loop(
     metrics: Arc<Metrics>,
     initial_estimates: HashMap<i64, f64>,
 ) {
-    let client = Client::new();
+    let client = Client::builder()
+        .connect_timeout(Duration::from_secs(2))
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap_or_else(|_| Client::new());
     let submit_url = endpoint(&base_url, "/api/test-results");
     let mut last_estimate_by_function = initial_estimates;
 
@@ -272,7 +276,7 @@ fn submission_loop(
         let submission = match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(item) => item,
             Err(RecvTimeoutError::Timeout) => {
-                if !running.load(Ordering::Relaxed) {
+                if !running.load(Ordering::SeqCst) {
                     break;
                 }
                 continue;
@@ -297,7 +301,7 @@ fn submission_loop(
                     if let Ok(mut guard) = metrics.last_error.lock() {
                         *guard = "network error while submitting hash".to_string();
                     }
-                } else {
+                } else if running.load(Ordering::SeqCst) {
                     thread::sleep(Duration::from_millis(100));
                 }
                 continue;
@@ -313,7 +317,9 @@ fn submission_loop(
                     }
                     break;
                 }
-                thread::sleep(Duration::from_millis(100));
+                if running.load(Ordering::SeqCst) {
+                    thread::sleep(Duration::from_millis(100));
+                }
                 continue;
             }
 
@@ -339,7 +345,7 @@ fn submission_loop(
                         if let Ok(mut guard) = metrics.last_error.lock() {
                             *guard = "submit succeeded but response JSON parse failed".to_string();
                         }
-                    } else {
+                    } else if running.load(Ordering::SeqCst) {
                         thread::sleep(Duration::from_millis(100));
                     }
                 }
@@ -378,9 +384,9 @@ fn worker_loop(
 
     let mut state = splitmix64(0x1234_5678_abcd_ef01u64 ^ worker_id as u64);
 
-    while running.load(Ordering::Relaxed) {
+    while running.load(Ordering::SeqCst) {
         for (meta, typed, hll) in &mut funcs {
-            if !running.load(Ordering::Relaxed) {
+            if !running.load(Ordering::SeqCst) {
                 break;
             }
             let seed = next_seed(&mut state);
@@ -418,7 +424,7 @@ fn stats_loop(
     let mut last_tests = 0u64;
     let mut last_time = Instant::now();
 
-    while running.load(Ordering::Relaxed) {
+    while running.load(Ordering::SeqCst) {
         thread::sleep(Duration::from_secs(1));
         let now = Instant::now();
 
@@ -464,12 +470,31 @@ fn stats_loop(
     }
 }
 
+fn stdin_shutdown_loop(running: Arc<AtomicBool>) {
+    let mut stdin = io::stdin().lock();
+    let mut buf = [0u8; 1];
+    while running.load(Ordering::SeqCst) {
+        match stdin.read(&mut buf) {
+            Ok(0) => break,
+            Ok(_) => {
+                if buf[0] == 3 || buf[0] == b'q' || buf[0] == b'Q' {
+                    running.store(false, Ordering::SeqCst);
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     let cores = args.cores.max(1);
 
     let client = Client::builder()
         .pool_max_idle_per_host(16)
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(15))
         .build()
         .context("creating HTTP client")?;
 
@@ -489,10 +514,22 @@ fn main() -> Result<()> {
 
     {
         let running = running.clone();
+        let sigints = Arc::new(AtomicU64::new(0));
+        let sigints_inner = sigints.clone();
         ctrlc::set_handler(move || {
-            running.store(false, Ordering::Relaxed);
+            let count = sigints_inner.fetch_add(1, Ordering::Relaxed) + 1;
+            running.store(false, Ordering::SeqCst);
+            if count >= 2 {
+                eprintln!("forcing exit on second Ctrl-C");
+                std::process::exit(130);
+            }
         })
         .context("installing ctrl-c handler")?;
+    }
+
+    {
+        let running = running.clone();
+        thread::spawn(move || stdin_shutdown_loop(running));
     }
 
     let submit_thread = {
