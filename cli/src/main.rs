@@ -541,6 +541,18 @@ fn main() -> Result<()> {
         thread::spawn(move || stdin_shutdown_loop(running));
     }
 
+    {
+        let running = running.clone();
+        thread::spawn(move || {
+            while running.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(50));
+            }
+            thread::sleep(Duration::from_secs(1));
+            eprintln!("forcing exit after 1s shutdown grace period");
+            std::process::exit(130);
+        });
+    }
+
     let submit_thread = {
         let running = running.clone();
         let metrics = metrics.clone();
