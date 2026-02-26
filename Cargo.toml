@@ -2,6 +2,7 @@
 members = [
   "server",
   "client",
+  "cli",
   "e2e_tests",
   "examples/simple-component",
   "examples/pow-test-functions",
