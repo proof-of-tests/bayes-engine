@@ -19,6 +19,7 @@ const GITHUB_API_BASE: &str = "https://api.github.com";
 const REPLAY_TTL_SECS: u64 = 600;
 const MAX_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
 const HLL_BITS: u8 = 12;
+const MAX_HLL_BITS: u8 = 20;
 
 static IN_MEMORY_REPLAY: Lazy<Mutex<HashMap<String, u64>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -337,7 +338,12 @@ struct HyperLogLogState {
 }
 
 impl HyperLogLogState {
+    fn normalize_bits(bits: u8) -> u8 {
+        bits.clamp(1, MAX_HLL_BITS)
+    }
+
     fn new(bits: u8) -> Self {
+        let bits = Self::normalize_bits(bits);
         let m = 1usize << bits;
         Self {
             bits,
@@ -364,7 +370,8 @@ impl HyperLogLogState {
     }
 
     fn add_hash(&mut self, hash: u64) -> bool {
-        let mask = (1usize << self.bits) - 1;
+        let bits = Self::normalize_bits(self.bits);
+        let mask = (1usize << bits) - 1;
         let register = (hash as usize) & mask;
         if hash < self.hashes[register] {
             self.hashes[register] = hash;
@@ -374,8 +381,9 @@ impl HyperLogLogState {
     }
 
     fn count(&self) -> f64 {
-        let m = (1u64 << self.bits) as f64;
-        let alpha = match self.bits {
+        let bits = Self::normalize_bits(self.bits);
+        let m = (1u64 << bits) as f64;
+        let alpha = match bits {
             4 => 0.673,
             5 => 0.697,
             6 => 0.709,
@@ -389,8 +397,8 @@ impl HyperLogLogState {
                 if *hash == u64::MAX {
                     0.0
                 } else {
-                    let remaining = *hash >> self.bits;
-                    let rho = remaining.leading_zeros() - self.bits as u32 + 1;
+                    let remaining = *hash >> bits;
+                    let rho = remaining.leading_zeros().saturating_sub(bits as u32) + 1;
                     2_f64.powi(-(rho as i32))
                 }
             })
@@ -1440,12 +1448,16 @@ async fn handle_submit_test_result(mut req: Request, env: Env) -> Result<Respons
     };
 
     let hll_bits: i32 = row.get("hll_bits");
+    let hll_bits = u8::try_from(hll_bits)
+        .ok()
+        .map(HyperLogLogState::normalize_bits)
+        .unwrap_or(HLL_BITS);
     let hll_json: String = row.get("hll_hashes_json");
     let submitted_updates: i64 = row.get("submitted_updates");
     let current_lowest_hash: Option<String> = row.get("lowest_hash");
     let current_lowest_seed: Option<String> = row.get("lowest_seed");
 
-    let mut hll = HyperLogLogState::from_json(hll_bits as u8, &hll_json);
+    let mut hll = HyperLogLogState::from_json(hll_bits, &hll_json);
     let improved = hll.add_hash(hash);
     if improved {
         let new_hll_json = hll.to_json();
@@ -1793,7 +1805,14 @@ async fn fetch(req: Request, env: Env, _ctx: worker::Context) -> Result<Response
             handle_get_wasm_file(ctx.env, id).await
         })
         .post_async("/api/test-results", |req, ctx| async move {
-            handle_submit_test_result(req, ctx.env).await
+            match handle_submit_test_result(req, ctx.env).await {
+                Ok(response) => Ok(response),
+                Err(err) => error_response(
+                    500,
+                    "internal_error",
+                    format!("Failed submitting test result: {}", err),
+                ),
+            }
         })
         .post_async("/api/ci-upload", |req, ctx| async move {
             handle_ci_upload(req, ctx.env).await
