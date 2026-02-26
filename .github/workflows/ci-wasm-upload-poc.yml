@@ -1,7 +1,6 @@
 name: CI WASM Upload PoC
 
 on:
-  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
@@ -9,15 +8,15 @@ on:
 
 jobs:
   upload-wasm:
-    name: Upload Sample WASM to bayes.lemmih.com
-    runs-on: ubuntu-latest
+    name: Test WASM Upload (Local Server)
+    runs-on: ubuntu-24.04
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     permissions:
       contents: read
       id-token: write
     env:
       DRY_RUN: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
-      UPLOAD_URL: ${{ github.event_name == 'pull_request' && format('https://bayes-engine-pr-{0}.lemmih.workers.dev/api/ci-upload', github.event.pull_request.number) || 'https://bayes.lemmih.com/api/ci-upload' }}
+      UPLOAD_URL: "http://localhost:8787/api/ci-upload"
 
     steps:
       - name: Checkout code
@@ -89,68 +88,57 @@ jobs:
 
           echo "oidc_token=$OIDC_TOKEN" >> "$GITHUB_OUTPUT"
 
-      - name: Wait for preview deployment (PR only)
-        if: ${{ github.event_name == 'pull_request' }}
+      - name: Start wrangler dev server
         shell: bash
         run: |
           set -euo pipefail
 
-          PREVIEW_BASE="https://bayes-engine-pr-${{ github.event.pull_request.number }}.lemmih.workers.dev"
-          echo "Waiting for preview deployment at ${PREVIEW_BASE}..."
+          # Start wrangler in background with e2e environment
+          nix run .#wrangler-dev -- --env e2e --port 8787 > wrangler.log 2>&1 &
+          WRANGLER_PID=$!
+          echo "WRANGLER_PID=$WRANGLER_PID" >> "$GITHUB_ENV"
+          echo "Wrangler started with PID $WRANGLER_PID"
 
+          # Wait for wrangler to be ready
           for i in $(seq 1 30); do
-            if curl -sS -o /dev/null "${PREVIEW_BASE}/content-hash.txt"; then
-              echo "Preview deployment is reachable."
+            if curl -sf "http://localhost:8787" > /dev/null 2>&1; then
+              echo "Wrangler is ready!"
               exit 0
             fi
-            echo "Preview not ready yet (attempt ${i}/30)."
-            sleep 10
+            echo "Waiting for wrangler (attempt $i/30)..."
+            sleep 2
           done
 
-          echo "Preview deployment not ready after waiting." >&2
+          echo "Wrangler failed to start within 60 seconds"
+          cat wrangler.log || true
           exit 1
+        env:
+          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ${{ secrets.NEON_DATABASE_URL }}
 
-      - name: Upload WASM to bayes.lemmih.com
+      - name: Upload WASM to local server
         id: upload
         shell: bash
         run: |
           set -euo pipefail
 
-          UPLOAD_OK=false
-          for i in $(seq 1 30); do
-            HTTP_CODE=$(curl -sS \
-              -o upload-response.json \
-              -w "%{http_code}" \
-              -X POST "${UPLOAD_URL}" \
-              -H "Authorization: Bearer ${{ steps.oidc.outputs.oidc_token }}" \
-              -F "file=@${{ steps.wasm.outputs.wasm_file }}" \
-              -F "declared_sha256=${{ steps.wasm.outputs.wasm_sha256 }}" \
-              -F "version=${GITHUB_SHA}" \
-              -F "dry_run=${DRY_RUN}")
+          HTTP_CODE=$(curl -sS \
+            -o upload-response.json \
+            -w "%{http_code}" \
+            -X POST "${UPLOAD_URL}" \
+            -H "Authorization: Bearer ${{ steps.oidc.outputs.oidc_token }}" \
+            -F "file=@${{ steps.wasm.outputs.wasm_file }}" \
+            -F "declared_sha256=${{ steps.wasm.outputs.wasm_sha256 }}" \
+            -F "version=${GITHUB_SHA}" \
+            -F "dry_run=${DRY_RUN}")
 
-            if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-              UPLOAD_OK=true
-              break
-            fi
-
-            if [ "${DRY_RUN}" = "true" ] && { [ "$HTTP_CODE" = "404" ] || { [ "$HTTP_CODE" = "500" ] && grep -q "Failed to ensure schema" upload-response.json; }; }; then
-              echo "Upload endpoint still on stale preview (attempt ${i}/30, HTTP ${HTTP_CODE}), retrying..."
-              sleep 10
-              continue
-            fi
-
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            echo "Upload succeeded with HTTP $HTTP_CODE"
+            cat upload-response.json
+          else
             echo "Upload request failed with HTTP ${HTTP_CODE}" >&2
             cat upload-response.json >&2 || true
             exit 1
-          done
-
-          if [ "${UPLOAD_OK}" != "true" ]; then
-            echo "Upload request did not succeed after retries" >&2
-            cat upload-response.json >&2 || true
-            exit 1
           fi
-
-          cat upload-response.json
 
       - name: Validate server response
         shell: bash
@@ -184,7 +172,19 @@ jobs:
           EXPECTED_HASH: ${{ steps.wasm.outputs.wasm_sha256 }}
           EXPECTED_DRY_RUN: ${{ env.DRY_RUN }}
 
+      - name: Stop wrangler dev server
+        if: always()
+        shell: bash
+        run: |
+          if [ -n "${WRANGLER_PID:-}" ]; then
+            echo "Stopping wrangler (PID $WRANGLER_PID)..."
+            kill "$WRANGLER_PID" 2>/dev/null || true
+            # Also kill any child processes
+            pkill -P "$WRANGLER_PID" 2>/dev/null || true
+          fi
+
       - name: Add workflow summary
+        if: always()
         shell: bash
         run: |
           {
@@ -192,13 +192,19 @@ jobs:
             echo ""
             echo "- Mode: ${{ env.DRY_RUN == 'true' && 'dry-run' || 'live' }}"
             echo "- Trigger: ${{ github.event_name }}"
-            echo "- Upload URL: \`${{ env.UPLOAD_URL }}\`"
+            echo "- Server: Local wrangler dev (isolated from production)"
+            echo "- Database: PostgreSQL via Hyperdrive"
             echo "- Uploaded file: \`${{ steps.wasm.outputs.wasm_file }}\`"
             echo "- File size: ${{ steps.wasm.outputs.wasm_size }} bytes"
             echo "- Declared SHA-256: \`${{ steps.wasm.outputs.wasm_sha256 }}\`"
             echo ""
-            echo "### Server Response"
-            echo '```json'
-            cat upload-response.json
-            echo '```'
+            if [ -f upload-response.json ]; then
+              echo "### Server Response"
+              echo '```json'
+              cat upload-response.json
+              echo '```'
+            else
+              echo "### Server Response"
+              echo "_No response file available_"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
