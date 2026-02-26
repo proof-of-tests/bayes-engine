@@ -44,6 +44,18 @@ struct UploadCatalogResponse {
     files: Vec<WasmFileSummary>,
 }
 
+#[derive(Debug, Deserialize)]
+struct WasmFileHllStateResponse {
+    functions: Vec<FunctionHllStateEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FunctionHllStateEntry {
+    function_id: i64,
+    hll_bits: u8,
+    hashes: Vec<String>,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 struct WasmFileSummary {
     id: i64,
@@ -79,6 +91,8 @@ struct Target {
     wasm_bytes: Vec<u8>,
     functions: Vec<FunctionSummary>,
     baseline_total_estimate: f64,
+    hll_bits: u8,
+    server_hashes_by_function: HashMap<i64, Vec<u64>>,
 }
 
 #[derive(Debug)]
@@ -184,6 +198,7 @@ struct FunctionSlot {
 struct SubmissionState {
     bits: u8,
     slots: Vec<Arc<FunctionSlot>>,
+    slot_by_function_id: HashMap<i64, usize>,
     notify: Notify,
 }
 
@@ -205,10 +220,16 @@ impl SubmissionState {
                     }),
                 })
             })
+            .collect::<Vec<_>>();
+        let slot_by_function_id = slots
+            .iter()
+            .enumerate()
+            .map(|(index, slot)| (slot.meta.id, index))
             .collect();
         Self {
             bits,
             slots,
+            slot_by_function_id,
             notify: Notify::new(),
         }
     }
@@ -263,6 +284,22 @@ impl SubmissionState {
             if let Ok(mut guard) = slot.state.lock() {
                 if hash < guard.server[register] {
                     guard.server[register] = hash;
+                }
+            }
+        }
+    }
+
+    fn initialize_server_hashes(&self, function_id: i64, hashes: &[u64]) {
+        let Some(&slot_index) = self.slot_by_function_id.get(&function_id) else {
+            return;
+        };
+        let Some(slot) = self.slots.get(slot_index) else {
+            return;
+        };
+        if let Ok(mut guard) = slot.state.lock() {
+            for (idx, hash) in hashes.iter().enumerate().take(guard.server.len()) {
+                if *hash < guard.server[idx] {
+                    guard.server[idx] = *hash;
                 }
             }
         }
@@ -381,11 +418,38 @@ fn fetch_target(client: &BlockingClient, base_url: &str) -> Result<Target> {
             .context("reading wasm file bytes")?
             .to_vec();
 
+        let hll_url = endpoint(base_url, &format!("/api/wasm-files/{}/hll-state", file.id));
+        let hll_state = client
+            .get(hll_url)
+            .send()
+            .context("requesting wasm hll state")?
+            .error_for_status()
+            .context("loading wasm hll state")?
+            .json::<WasmFileHllStateResponse>()
+            .context("decoding wasm hll state")?;
+
+        let hll_bits = hll_state
+            .functions
+            .first()
+            .map(|entry| entry.hll_bits)
+            .unwrap_or(12);
+        let mut server_hashes_by_function = HashMap::new();
+        for entry in hll_state.functions {
+            let hashes = entry
+                .hashes
+                .iter()
+                .filter_map(|value| value.parse::<u64>().ok())
+                .collect::<Vec<_>>();
+            server_hashes_by_function.insert(entry.function_id, hashes);
+        }
+
         return Ok(Target {
             repository: repo.github_repo,
             wasm_bytes,
             functions: file.functions,
             baseline_total_estimate: repo_list.total_estimated_tests,
+            hll_bits,
+            server_hashes_by_function,
         });
     }
 
@@ -682,13 +746,18 @@ fn main() -> Result<()> {
     let target = fetch_target(&client, &args.base_url)?;
     let engine = Arc::new(create_engine()?);
     let module = Arc::new(Module::new(&engine, &target.wasm_bytes).context("compiling module")?);
+    let hll_bits = if target.hll_bits > 0 {
+        target.hll_bits
+    } else {
+        args.hll_bits
+    };
 
     let metrics = Arc::new(Metrics::default());
     let shutdown = Arc::new(Shutdown::new());
-    let submission_state = Arc::new(SubmissionState::new(
-        args.hll_bits,
-        target.functions.clone(),
-    ));
+    let submission_state = Arc::new(SubmissionState::new(hll_bits, target.functions.clone()));
+    for (function_id, hashes) in &target.server_hashes_by_function {
+        submission_state.initialize_server_hashes(*function_id, hashes);
+    }
 
     let mut initial_estimates = HashMap::new();
     for f in &target.functions {
@@ -770,7 +839,7 @@ fn main() -> Result<()> {
         let module = module.clone();
         let worker_slots = slots.clone();
         let errors = errors.clone();
-        let hll_bits = args.hll_bits;
+        let hll_bits = hll_bits;
         workers.push(thread::spawn(move || {
             if let Err(err) = worker_loop(
                 shutdown,
