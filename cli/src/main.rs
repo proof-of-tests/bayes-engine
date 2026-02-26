@@ -6,12 +6,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tokio::runtime::Builder as TokioRuntimeBuilder;
 use tokio::sync::mpsc as tokio_mpsc;
 use tokio::sync::mpsc::error::TrySendError as TokioTrySendError;
+use tokio_util::sync::CancellationToken;
 use wasmtime::{Config, Engine, Linker, Module, OptLevel, Store, TypedFunc};
 
 #[derive(Parser, Debug)]
@@ -123,6 +124,44 @@ impl Metrics {
 
     fn estimate_gain(&self) -> f64 {
         f64::from_bits(self.estimate_gain_bits.load(Ordering::Relaxed))
+    }
+}
+
+struct Shutdown {
+    requested: AtomicBool,
+    wait_mutex: Mutex<()>,
+    wait_cvar: Condvar,
+    token: CancellationToken,
+}
+
+impl Shutdown {
+    fn new() -> Self {
+        Self {
+            requested: AtomicBool::new(false),
+            wait_mutex: Mutex::new(()),
+            wait_cvar: Condvar::new(),
+            token: CancellationToken::new(),
+        }
+    }
+
+    fn request(&self) {
+        if !self.requested.swap(true, Ordering::SeqCst) {
+            self.token.cancel();
+            self.wait_cvar.notify_all();
+        }
+    }
+
+    fn is_requested(&self) -> bool {
+        self.requested.load(Ordering::SeqCst)
+    }
+
+    fn wait_timeout(&self, duration: Duration) {
+        if self.is_requested() {
+            return;
+        }
+        if let Ok(guard) = self.wait_mutex.lock() {
+            let _ = self.wait_cvar.wait_timeout(guard, duration);
+        }
     }
 }
 
@@ -261,7 +300,7 @@ fn create_engine() -> Result<Engine> {
 }
 
 async fn submission_loop_async(
-    running: Arc<AtomicBool>,
+    shutdown: Arc<Shutdown>,
     base_url: String,
     mut rx: tokio_mpsc::Receiver<Submission>,
     metrics: Arc<Metrics>,
@@ -276,13 +315,12 @@ async fn submission_loop_async(
     let mut last_estimate_by_function = initial_estimates;
 
     loop {
-        if !running.load(Ordering::SeqCst) {
-            break;
-        }
-
-        let submission = match rx.recv().await {
-            Some(item) => item,
-            None => break,
+        let submission = tokio::select! {
+            _ = shutdown.token.cancelled() => break,
+            next = rx.recv() => match next {
+                Some(item) => item,
+                None => break,
+            },
         };
 
         let payload = SubmitHashRequest {
@@ -302,8 +340,11 @@ async fn submission_loop_async(
                     if let Ok(mut guard) = metrics.last_error.lock() {
                         *guard = "network error while submitting hash".to_string();
                     }
-                } else if running.load(Ordering::SeqCst) {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                } else {
+                    tokio::select! {
+                        _ = shutdown.token.cancelled() => break,
+                        _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                    }
                 }
                 continue;
             };
@@ -321,8 +362,9 @@ async fn submission_loop_async(
                     }
                     break;
                 }
-                if running.load(Ordering::SeqCst) {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                tokio::select! {
+                    _ = shutdown.token.cancelled() => break,
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => {}
                 }
                 continue;
             }
@@ -349,21 +391,24 @@ async fn submission_loop_async(
                         if let Ok(mut guard) = metrics.last_error.lock() {
                             *guard = "submit succeeded but response JSON parse failed".to_string();
                         }
-                    } else if running.load(Ordering::SeqCst) {
-                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    } else {
+                        tokio::select! {
+                            _ = shutdown.token.cancelled() => break,
+                            _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                        }
                     }
                 }
             }
         }
 
-        if !submitted {
+        if !submitted || shutdown.is_requested() {
             continue;
         }
     }
 }
 
 fn worker_loop(
-    running: Arc<AtomicBool>,
+    shutdown: Arc<Shutdown>,
     tx: tokio_mpsc::Sender<Submission>,
     metrics: Arc<Metrics>,
     engine: Arc<Engine>,
@@ -389,9 +434,9 @@ fn worker_loop(
 
     let mut state = splitmix64(0x1234_5678_abcd_ef01u64 ^ worker_id as u64);
 
-    while running.load(Ordering::SeqCst) {
+    while !shutdown.is_requested() {
         for (meta, typed, hll) in &mut funcs {
-            if !running.load(Ordering::SeqCst) {
+            if shutdown.is_requested() {
                 break;
             }
             let seed = next_seed(&mut state);
@@ -415,7 +460,7 @@ fn worker_loop(
                     }
                 }
                 Err(_) => {
-                    if !running.load(Ordering::SeqCst) {
+                    if shutdown.is_requested() {
                         return Ok(());
                     }
                 }
@@ -427,7 +472,7 @@ fn worker_loop(
 }
 
 fn stats_loop(
-    running: Arc<AtomicBool>,
+    shutdown: Arc<Shutdown>,
     metrics: Arc<Metrics>,
     repo: String,
     cores: usize,
@@ -436,16 +481,12 @@ fn stats_loop(
     let mut last_tests = 0u64;
     let mut last_time = Instant::now();
 
-    while running.load(Ordering::SeqCst) {
-        thread::sleep(Duration::from_millis(100));
-        if !running.load(Ordering::SeqCst) {
+    while !shutdown.is_requested() {
+        shutdown.wait_timeout(Duration::from_secs(1));
+        if shutdown.is_requested() {
             break;
         }
-
         let now = Instant::now();
-        if now.duration_since(last_time) < Duration::from_secs(1) {
-            continue;
-        }
 
         let local_tests = metrics.local_tests.load(Ordering::Relaxed);
         let submitted = metrics.submitted_hashes.load(Ordering::Relaxed);
@@ -489,15 +530,15 @@ fn stats_loop(
     }
 }
 
-fn stdin_shutdown_loop(running: Arc<AtomicBool>) {
+fn stdin_shutdown_loop(shutdown: Arc<Shutdown>) {
     let mut stdin = io::stdin().lock();
     let mut buf = [0u8; 1];
-    while running.load(Ordering::SeqCst) {
+    while !shutdown.is_requested() {
         match stdin.read(&mut buf) {
             Ok(0) => break,
             Ok(_) => {
                 if buf[0] == 3 || buf[0] == b'q' || buf[0] == b'Q' {
-                    running.store(false, Ordering::SeqCst);
+                    shutdown.request();
                     break;
                 }
             }
@@ -522,7 +563,7 @@ fn main() -> Result<()> {
     let module = Arc::new(Module::new(&engine, &target.wasm_bytes).context("compiling module")?);
 
     let metrics = Arc::new(Metrics::default());
-    let running = Arc::new(AtomicBool::new(true));
+    let shutdown = Arc::new(Shutdown::new());
 
     let mut initial_estimates = HashMap::new();
     for f in &target.functions {
@@ -532,12 +573,12 @@ fn main() -> Result<()> {
     let (tx, rx) = tokio_mpsc::channel::<Submission>(16_384);
 
     {
-        let running = running.clone();
+        let shutdown = shutdown.clone();
         let sigints = Arc::new(AtomicU64::new(0));
         let sigints_inner = sigints.clone();
         ctrlc::set_handler(move || {
             let count = sigints_inner.fetch_add(1, Ordering::Relaxed) + 1;
-            running.store(false, Ordering::SeqCst);
+            shutdown.request();
             if count >= 2 {
                 eprintln!("forcing exit on second Ctrl-C");
                 std::process::exit(130);
@@ -547,24 +588,12 @@ fn main() -> Result<()> {
     }
 
     {
-        let running = running.clone();
-        thread::spawn(move || stdin_shutdown_loop(running));
-    }
-
-    {
-        let running = running.clone();
-        thread::spawn(move || {
-            while running.load(Ordering::SeqCst) {
-                thread::sleep(Duration::from_millis(50));
-            }
-            thread::sleep(Duration::from_secs(1));
-            eprintln!("forcing exit after 1s shutdown grace period");
-            std::process::exit(130);
-        });
+        let shutdown = shutdown.clone();
+        thread::spawn(move || stdin_shutdown_loop(shutdown));
     }
 
     let submit_thread = {
-        let running = running.clone();
+        let shutdown = shutdown.clone();
         let metrics = metrics.clone();
         let base_url = args.base_url.clone();
         thread::spawn(move || {
@@ -573,7 +602,7 @@ fn main() -> Result<()> {
                 .build()
                 .expect("failed to build tokio runtime for submit thread");
             runtime.block_on(submission_loop_async(
-                running,
+                shutdown,
                 base_url,
                 rx,
                 metrics,
@@ -583,11 +612,14 @@ fn main() -> Result<()> {
     };
 
     let epoch_thread = {
-        let running = running.clone();
+        let shutdown = shutdown.clone();
         let engine = engine.clone();
         thread::spawn(move || {
-            while running.load(Ordering::SeqCst) {
-                thread::sleep(Duration::from_millis(100));
+            while !shutdown.is_requested() {
+                shutdown.wait_timeout(Duration::from_millis(100));
+                if shutdown.is_requested() {
+                    break;
+                }
                 engine.increment_epoch();
             }
             // Nudge one final time so any blocked call observes shutdown promptly.
@@ -596,17 +628,17 @@ fn main() -> Result<()> {
     };
 
     let stats_thread = {
-        let running = running.clone();
+        let shutdown = shutdown.clone();
         let metrics = metrics.clone();
         let repo = target.repository.clone();
         let base_total = target.baseline_total_estimate;
-        thread::spawn(move || stats_loop(running, metrics, repo, cores, base_total))
+        thread::spawn(move || stats_loop(shutdown, metrics, repo, cores, base_total))
     };
 
     let errors = Arc::new(Mutex::new(Vec::<String>::new()));
     let mut workers = Vec::new();
     for worker_id in 0..cores {
-        let running = running.clone();
+        let shutdown = shutdown.clone();
         let tx = tx.clone();
         let metrics = metrics.clone();
         let engine = engine.clone();
@@ -616,7 +648,7 @@ fn main() -> Result<()> {
         let hll_bits = args.hll_bits;
         workers.push(thread::spawn(move || {
             if let Err(err) = worker_loop(
-                running, tx, metrics, engine, module, functions, hll_bits, worker_id,
+                shutdown, tx, metrics, engine, module, functions, hll_bits, worker_id,
             ) {
                 if let Ok(mut guard) = errors.lock() {
                     guard.push(format!("worker {worker_id}: {err}"));

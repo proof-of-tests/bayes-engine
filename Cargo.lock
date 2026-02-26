@@ -149,6 +149,8 @@ dependencies = [
  "rand",
  "reqwest",
  "serde",
+ "tokio",
+ "tokio-util",
  "wasmtime",
 ]
 
