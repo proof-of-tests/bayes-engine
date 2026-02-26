@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
+use std::sync::mpsc::{self, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -93,7 +93,9 @@ struct Metrics {
     local_tests: AtomicU64,
     submitted_hashes: AtomicU64,
     failed_submissions: AtomicU64,
+    dropped_submissions: AtomicU64,
     estimate_gain_bits: AtomicU64,
+    last_error: Mutex<String>,
 }
 
 impl Metrics {
@@ -286,33 +288,66 @@ fn submission_loop(
             hash: submission.hash.to_string(),
         };
 
-        let response = client.post(&submit_url).json(&payload).send();
-        let Ok(response) = response else {
-            metrics.failed_submissions.fetch_add(1, Ordering::Relaxed);
-            continue;
-        };
-        let Ok(response) = response.error_for_status() else {
-            metrics.failed_submissions.fetch_add(1, Ordering::Relaxed);
-            continue;
-        };
+        let mut submitted = false;
+        for attempt in 1..=3 {
+            let send_result = client.post(&submit_url).json(&payload).send();
+            let Ok(response) = send_result else {
+                if attempt == 3 {
+                    metrics.failed_submissions.fetch_add(1, Ordering::Relaxed);
+                    if let Ok(mut guard) = metrics.last_error.lock() {
+                        *guard = "network error while submitting hash".to_string();
+                    }
+                } else {
+                    thread::sleep(Duration::from_millis(100));
+                }
+                continue;
+            };
 
-        match response.json::<SubmitHashResponse>() {
-            Ok(parsed) => {
-                metrics.submitted_hashes.fetch_add(1, Ordering::Relaxed);
-                if parsed.improved {
-                    let prev = last_estimate_by_function
-                        .get(&submission.function_id)
-                        .copied()
-                        .unwrap_or(0.0);
-                    let delta = (parsed.estimated_tests - prev).max(0.0);
-                    metrics.add_estimate_gain(delta);
-                    last_estimate_by_function
-                        .insert(submission.function_id, parsed.estimated_tests);
+            let status = response.status();
+            if !status.is_success() {
+                let body = response.text().unwrap_or_else(|_| "<no body>".to_string());
+                if attempt == 3 || !(status.is_server_error() || status.as_u16() == 429) {
+                    metrics.failed_submissions.fetch_add(1, Ordering::Relaxed);
+                    if let Ok(mut guard) = metrics.last_error.lock() {
+                        *guard = format!("submit failed: HTTP {} {}", status.as_u16(), body.trim());
+                    }
+                    break;
+                }
+                thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+
+            match response.json::<SubmitHashResponse>() {
+                Ok(parsed) => {
+                    metrics.submitted_hashes.fetch_add(1, Ordering::Relaxed);
+                    if parsed.improved {
+                        let prev = last_estimate_by_function
+                            .get(&submission.function_id)
+                            .copied()
+                            .unwrap_or(0.0);
+                        let delta = (parsed.estimated_tests - prev).max(0.0);
+                        metrics.add_estimate_gain(delta);
+                        last_estimate_by_function
+                            .insert(submission.function_id, parsed.estimated_tests);
+                    }
+                    submitted = true;
+                    break;
+                }
+                Err(_) => {
+                    if attempt == 3 {
+                        metrics.failed_submissions.fetch_add(1, Ordering::Relaxed);
+                        if let Ok(mut guard) = metrics.last_error.lock() {
+                            *guard = "submit succeeded but response JSON parse failed".to_string();
+                        }
+                    } else {
+                        thread::sleep(Duration::from_millis(100));
+                    }
                 }
             }
-            Err(_) => {
-                metrics.failed_submissions.fetch_add(1, Ordering::Relaxed);
-            }
+        }
+
+        if !submitted {
+            continue;
         }
     }
 }
@@ -352,13 +387,19 @@ fn worker_loop(
             if let Ok(hash) = typed.call(&mut store, seed) {
                 metrics.local_tests.fetch_add(1, Ordering::Relaxed);
                 if hll.add_hash(hash) {
-                    let _ = tx.send(Submission {
+                    match tx.try_send(Submission {
                         function_id: meta.id,
                         wasm_file_id: meta.wasm_file_id,
                         function_name: meta.name.clone(),
                         seed,
                         hash,
-                    });
+                    }) {
+                        Ok(()) => {}
+                        Err(TrySendError::Full(_)) => {
+                            metrics.dropped_submissions.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(TrySendError::Disconnected(_)) => return Ok(()),
+                    }
                 }
             }
         }
@@ -384,7 +425,14 @@ fn stats_loop(
         let local_tests = metrics.local_tests.load(Ordering::Relaxed);
         let submitted = metrics.submitted_hashes.load(Ordering::Relaxed);
         let failed = metrics.failed_submissions.load(Ordering::Relaxed);
+        let dropped = metrics.dropped_submissions.load(Ordering::Relaxed);
         let estimate_gain = metrics.estimate_gain();
+        let last_error = metrics
+            .last_error
+            .lock()
+            .ok()
+            .map(|s| s.clone())
+            .unwrap_or_default();
 
         let elapsed = now.duration_since(last_time).as_secs_f64().max(0.001);
         let delta_tests = local_tests.saturating_sub(last_tests) as f64;
@@ -404,6 +452,10 @@ fn stats_loop(
             estimate_gain
         );
         println!("failed submissions: {failed}");
+        println!("dropped submissions (queue full): {dropped}");
+        if !last_error.is_empty() {
+            println!("last submit error: {last_error}");
+        }
         println!("press Ctrl-C to stop");
         let _ = io::stdout().flush();
 
