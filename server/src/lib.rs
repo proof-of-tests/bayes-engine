@@ -18,7 +18,7 @@ const EXPECTED_OIDC_AUDIENCE: &str = "bayes-engine-ci-upload";
 const GITHUB_API_BASE: &str = "https://api.github.com";
 const REPLAY_TTL_SECS: u64 = 600;
 const MAX_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
-const HLL_BITS: u8 = 12;
+const HLL_BITS: u8 = 5;
 const MAX_HLL_BITS: u8 = 20;
 
 static IN_MEMORY_REPLAY: Lazy<Mutex<HashMap<String, u64>>> =
@@ -330,7 +330,7 @@ async fn ensure_schema(client: &tokio_postgres::Client) -> Result<()> {
             repository_id BIGINT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
             version_id BIGINT NOT NULL REFERENCES repository_versions(id) ON DELETE CASCADE,
             function_name TEXT NOT NULL,
-            hll_bits INTEGER NOT NULL DEFAULT 12,
+            hll_bits INTEGER NOT NULL DEFAULT 5,
             hll_hashes_json TEXT NOT NULL,
             submitted_updates BIGINT NOT NULL DEFAULT 0,
             lowest_hash TEXT,
