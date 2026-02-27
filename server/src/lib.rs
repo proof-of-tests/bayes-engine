@@ -33,21 +33,6 @@ struct UppercaseResponse {
     result: String,
 }
 
-#[derive(Deserialize)]
-struct MessageRequest {
-    message: String,
-}
-
-#[derive(Serialize)]
-struct Message {
-    message: String,
-}
-
-#[derive(Serialize)]
-struct MessagesResponse {
-    messages: Vec<Message>,
-}
-
 #[derive(Serialize)]
 struct ApiErrorResponse {
     ok: bool,
@@ -289,59 +274,6 @@ async fn connect_to_db(env: &Env) -> Result<tokio_postgres::Client> {
     });
 
     Ok(client)
-}
-
-async fn ensure_schema(client: &tokio_postgres::Client) -> Result<()> {
-    client
-        .batch_execute(
-            "
-        CREATE TABLE IF NOT EXISTS messages (
-            message TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS repositories (
-            id BIGSERIAL PRIMARY KEY,
-            github_repo TEXT NOT NULL UNIQUE,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-
-        CREATE TABLE IF NOT EXISTS repository_versions (
-            id BIGSERIAL PRIMARY KEY,
-            repository_id BIGINT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-            version TEXT NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            UNIQUE(repository_id, version)
-        );
-
-        CREATE TABLE IF NOT EXISTS wasm_files (
-            id BIGSERIAL PRIMARY KEY,
-            repository_id BIGINT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-            version_id BIGINT NOT NULL REFERENCES repository_versions(id) ON DELETE CASCADE,
-            file_sha256 TEXT NOT NULL,
-            r2_key TEXT,
-            uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            UNIQUE(repository_id, version_id, file_sha256)
-        );
-
-        CREATE TABLE IF NOT EXISTS wasm_functions (
-            id BIGSERIAL PRIMARY KEY,
-            wasm_file_id BIGINT NOT NULL REFERENCES wasm_files(id) ON DELETE CASCADE,
-            repository_id BIGINT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-            version_id BIGINT NOT NULL REFERENCES repository_versions(id) ON DELETE CASCADE,
-            function_name TEXT NOT NULL,
-            hll_bits INTEGER NOT NULL DEFAULT 5,
-            hll_hashes_json TEXT NOT NULL,
-            submitted_updates BIGINT NOT NULL DEFAULT 0,
-            lowest_hash TEXT,
-            lowest_seed TEXT,
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            UNIQUE(wasm_file_id, function_name)
-        );
-
-        ",
-        )
-        .await
-        .map_err(|e| Error::RustError(format!("Failed to ensure schema: {}", e)))
 }
 
 fn now_unix_secs() -> u64 {
@@ -1333,7 +1265,6 @@ async fn handle_submit_test_result(mut req: Request, env: Env) -> Result<Respons
     };
 
     let client = connect_to_db(&env).await?;
-    ensure_schema(&client).await?;
 
     let mut function_id = body.function_id;
     let mut row = client
@@ -1636,9 +1567,6 @@ async fn handle_ci_upload(mut req: Request, env: Env) -> Result<Response> {
             Ok(client) => client,
             Err(e) => return Response::error(format!("Failed to connect to database: {}", e), 500),
         };
-        if let Err(e) = ensure_schema(&client).await {
-            return Response::error(format!("Failed to ensure schema: {}", e), 500);
-        }
 
         let storage_key = format!(
             "{}/{}/{}.wasm",
@@ -1802,74 +1730,6 @@ async fn fetch(req: Request, env: Env, _ctx: worker::Context) -> Result<Response
         })
         .post_async("/api/ci-upload", |req, ctx| async move {
             handle_ci_upload(req, ctx.env).await
-        })
-        .get_async("/api/messages", |_req, ctx| async move {
-            let env = ctx.env;
-
-            let client = match connect_to_db(&env).await {
-                Ok(client) => client,
-                Err(e) => {
-                    return Response::error(format!("Failed to connect to database: {}", e), 500);
-                }
-            };
-            if let Err(e) = ensure_schema(&client).await {
-                return Response::error(format!("Failed to ensure schema: {}", e), 500);
-            }
-
-            match client
-                .query("SELECT message FROM messages ORDER BY message", &[])
-                .await
-            {
-                Ok(rows) => {
-                    let messages: Vec<Message> = rows
-                        .iter()
-                        .map(|row| {
-                            let message: String = row.get(0);
-                            Message { message }
-                        })
-                        .collect();
-
-                    let response = MessagesResponse { messages };
-                    Response::from_json(&response)
-                }
-                Err(e) => Response::error(format!("Failed to query messages: {}", e), 500),
-            }
-        })
-        .post_async("/api/messages", |mut req, ctx| async move {
-            let env = ctx.env;
-
-            let body: MessageRequest = match req.json().await {
-                Ok(b) => b,
-                Err(e) => {
-                    return Response::error(format!("Invalid request: {}", e), 400);
-                }
-            };
-
-            let client = match connect_to_db(&env).await {
-                Ok(client) => client,
-                Err(e) => {
-                    return Response::error(format!("Failed to connect to database: {}", e), 500);
-                }
-            };
-            if let Err(e) = ensure_schema(&client).await {
-                return Response::error(format!("Failed to ensure schema: {}", e), 500);
-            }
-
-            match client
-                .execute(
-                    "INSERT INTO messages (message) VALUES ($1)",
-                    &[&body.message],
-                )
-                .await
-            {
-                Ok(_) => {
-                    let response = Message {
-                        message: body.message,
-                    };
-                    Response::from_json(&response)
-                }
-                Err(e) => Response::error(format!("Failed to insert message: {}", e), 500),
-            }
         })
         .get_async("/*catchall", |_req, _ctx| async move {
             Response::from_html(include_str!("../../public/index.html"))
