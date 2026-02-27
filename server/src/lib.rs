@@ -1266,29 +1266,13 @@ async fn handle_submit_test_result(mut req: Request, env: Env) -> Result<Respons
 
     let client = connect_to_db(&env).await?;
 
-    // Start a transaction to ensure atomic read-modify-write with row locking
-    client
-        .execute("BEGIN", &[])
-        .await
-        .map_err(|e| Error::RustError(format!("Failed to begin transaction: {}", e)))?;
-
-    let result = handle_submit_test_result_inner(&client, &body, seed, hash).await;
-
-    // Commit or rollback based on result
-    match &result {
-        Ok(_) => {
-            client
-                .execute("COMMIT", &[])
-                .await
-                .map_err(|e| Error::RustError(format!("Failed to commit transaction: {}", e)))?;
-        }
-        Err(_) => {
-            // Best effort rollback on error
-            let _ = client.execute("ROLLBACK", &[]).await;
-        }
-    }
-
-    result
+    // Note: We intentionally avoid explicit transactions (BEGIN/COMMIT) here because
+    // they cause "connection closed" errors with Hyperdrive's connection pooler when
+    // used with tokio-postgres in CloudFlare Workers. The read-modify-write pattern
+    // may have race conditions under concurrent load, but this is acceptable for HLL
+    // which is designed for approximate counting. Lost updates only slightly reduce
+    // estimation accuracy and do not cause data corruption.
+    handle_submit_test_result_inner(&client, &body, seed, hash).await
 }
 
 async fn handle_submit_test_result_inner(
@@ -1361,7 +1345,7 @@ async fn handle_submit_test_result_inner(
         }
     }
 
-    // Now lock the row and read the current state atomically using SELECT ... FOR UPDATE
+    // Read current HLL state (without row locking since we're not using transactions)
     let row = client
         .query_opt(
             "
@@ -1369,12 +1353,11 @@ async fn handle_submit_test_result_inner(
             id,
             hll_bits,
             hll_hashes_json,
-            COALESCE(NULLIF(to_jsonb(wasm_functions)->>'submitted_updates', '')::BIGINT, 0) AS submitted_updates,
-            to_jsonb(wasm_functions)->>'lowest_hash' AS lowest_hash,
-            to_jsonb(wasm_functions)->>'lowest_seed' AS lowest_seed
+            submitted_updates,
+            lowest_hash,
+            lowest_seed
         FROM wasm_functions
         WHERE id = $1
-        FOR UPDATE
         ",
             &[&function_id],
         )
