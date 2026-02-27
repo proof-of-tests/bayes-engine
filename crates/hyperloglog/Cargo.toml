@@ -1,0 +1,13 @@
+[package]
+name = "hyperloglog"
+version.workspace = true
+edition.workspace = true
+description = "Min-hash variant HyperLogLog for proof-of-work cardinality estimation"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"], optional = true }
+serde_json = "1.0"
+
+[features]
+default = []
+serde = ["dep:serde"]

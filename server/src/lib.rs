@@ -1,5 +1,6 @@
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use hyperloglog::{HyperLogLog, DEFAULT_HLL_BITS};
 use js_sys::{Array, Function, Object, Reflect, Uint8Array};
 use once_cell::sync::Lazy;
 use serde::de::DeserializeOwned;
@@ -18,8 +19,6 @@ const EXPECTED_OIDC_AUDIENCE: &str = "bayes-engine-ci-upload";
 const GITHUB_API_BASE: &str = "https://api.github.com";
 const REPLAY_TTL_SECS: u64 = 600;
 const MAX_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
-const HLL_BITS: u8 = 5;
-const MAX_HLL_BITS: u8 = 20;
 
 static IN_MEMORY_REPLAY: Lazy<Mutex<HashMap<String, u64>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -343,87 +342,6 @@ async fn ensure_schema(client: &tokio_postgres::Client) -> Result<()> {
         )
         .await
         .map_err(|e| Error::RustError(format!("Failed to ensure schema: {}", e)))
-}
-
-#[derive(Clone)]
-struct HyperLogLogState {
-    bits: u8,
-    hashes: Vec<u64>,
-}
-
-impl HyperLogLogState {
-    fn normalize_bits(bits: u8) -> u8 {
-        bits.clamp(1, MAX_HLL_BITS)
-    }
-
-    fn new(bits: u8) -> Self {
-        let bits = Self::normalize_bits(bits);
-        let m = 1usize << bits;
-        Self {
-            bits,
-            hashes: vec![u64::MAX; m],
-        }
-    }
-
-    fn from_json(bits: u8, json: &str) -> Self {
-        let parsed = serde_json::from_str::<Vec<String>>(json).ok();
-        let mut state = Self::new(bits);
-        if let Some(values) = parsed {
-            for (index, value) in values.iter().enumerate().take(state.hashes.len()) {
-                if let Ok(parsed_value) = value.parse::<u64>() {
-                    state.hashes[index] = parsed_value;
-                }
-            }
-        }
-        state
-    }
-
-    fn to_json(&self) -> String {
-        let values: Vec<String> = self.hashes.iter().map(|value| value.to_string()).collect();
-        serde_json::to_string(&values).unwrap_or_else(|_| "[]".to_string())
-    }
-
-    fn add_hash(&mut self, hash: u64) -> bool {
-        let bits = Self::normalize_bits(self.bits);
-        let mask = (1usize << bits) - 1;
-        let register = (hash as usize) & mask;
-        if hash < self.hashes[register] {
-            self.hashes[register] = hash;
-            return true;
-        }
-        false
-    }
-
-    fn count(&self) -> f64 {
-        let bits = Self::normalize_bits(self.bits);
-        let m = (1u64 << bits) as f64;
-        let alpha = match bits {
-            4 => 0.673,
-            5 => 0.697,
-            6 => 0.709,
-            _ => 0.7213 / (1.0 + 1.079 / m),
-        };
-
-        let sum: f64 = self
-            .hashes
-            .iter()
-            .map(|hash| {
-                if *hash == u64::MAX {
-                    0.0
-                } else {
-                    let remaining = *hash >> bits;
-                    let rho = remaining.leading_zeros().saturating_sub(bits as u32) + 1;
-                    2_f64.powi(-(rho as i32))
-                }
-            })
-            .sum();
-
-        if sum == 0.0 {
-            0.0
-        } else {
-            alpha * m * m / sum
-        }
-    }
 }
 
 fn now_unix_secs() -> u64 {
@@ -1002,7 +920,7 @@ async fn insert_wasm_catalog(
     let wasm_file_id: i64 = file_row.get(0);
 
     let mut function_rows = Vec::new();
-    let default_hll = HyperLogLogState::new(HLL_BITS).to_json();
+    let default_hll = HyperLogLog::new(DEFAULT_HLL_BITS).to_json();
 
     for function_name in function_names {
         let row = client
@@ -1021,7 +939,7 @@ async fn insert_wasm_catalog(
                     &repository_id,
                     &version_id,
                     &function_name,
-                    &(HLL_BITS as i32),
+                    &(DEFAULT_HLL_BITS as i32),
                     &default_hll,
                 ],
             )
@@ -1111,7 +1029,7 @@ fn build_repository_detail(
                 .find(|file| file.id == file_id)
             {
                 if file.functions.iter().all(|f| f.id != fid) {
-                    let hll = HyperLogLogState::from_json(bits as u8, &hll_json);
+                    let hll = HyperLogLog::from_json(bits as u8, &hll_json);
                     let estimate = hll.count();
                     let updates = function_updates.unwrap_or(0);
                     file.functions.push(FunctionSummary {
@@ -1381,8 +1299,8 @@ async fn handle_get_wasm_file_hll_state(env: Env, wasm_file_id: i64) -> Result<R
         let function_name: String = row.get("function_name");
         let hll_bits: i32 = row.get("hll_bits");
         let hll_hashes_json: String = row.get("hll_hashes_json");
-        let hll = HyperLogLogState::from_json(hll_bits as u8, &hll_hashes_json);
-        let hashes = hll.hashes.iter().map(|v| v.to_string()).collect();
+        let hll = HyperLogLog::from_json(hll_bits as u8, &hll_hashes_json);
+        let hashes = hll.hashes().iter().map(|v| v.to_string()).collect();
         functions.push(FunctionHllStateResponse {
             function_id,
             function_name,
@@ -1455,7 +1373,7 @@ async fn handle_submit_test_result(mut req: Request, env: Env) -> Result<Respons
                 if let Some(file_row) = file_row {
                     let repository_id: i64 = file_row.get("repository_id");
                     let version_id: i64 = file_row.get("version_id");
-                    let default_hll = HyperLogLogState::new(HLL_BITS).to_json();
+                    let default_hll = HyperLogLog::new(DEFAULT_HLL_BITS).to_json();
 
                     let upsert_row = client
                         .query_one(
@@ -1473,7 +1391,7 @@ async fn handle_submit_test_result(mut req: Request, env: Env) -> Result<Respons
                                 &repository_id,
                                 &version_id,
                                 &name,
-                                &(HLL_BITS as i32),
+                                &(DEFAULT_HLL_BITS as i32),
                                 &default_hll,
                             ],
                         )
@@ -1512,16 +1430,13 @@ async fn handle_submit_test_result(mut req: Request, env: Env) -> Result<Respons
     };
 
     let hll_bits: i32 = row.get("hll_bits");
-    let hll_bits = u8::try_from(hll_bits)
-        .ok()
-        .map(HyperLogLogState::normalize_bits)
-        .unwrap_or(HLL_BITS);
+    let hll_bits = u8::try_from(hll_bits).unwrap_or(DEFAULT_HLL_BITS);
     let hll_json: String = row.get("hll_hashes_json");
     let submitted_updates: i64 = row.get("submitted_updates");
     let current_lowest_hash: Option<String> = row.get("lowest_hash");
     let current_lowest_seed: Option<String> = row.get("lowest_seed");
 
-    let mut hll = HyperLogLogState::from_json(hll_bits, &hll_json);
+    let mut hll = HyperLogLog::from_json(hll_bits, &hll_json);
     let improved = hll.add_hash(hash);
     if improved {
         let new_hll_json = hll.to_json();

@@ -142,6 +142,7 @@ dependencies = [
  "gloo-net",
  "gloo-storage",
  "gloo-timers",
+ "hyperloglog",
  "js-sys",
  "rand",
  "serde",
@@ -1084,6 +1085,14 @@ dependencies = [
  "tokio",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "hyperloglog"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2075,6 +2084,7 @@ dependencies = [
  "base64",
  "console_error_panic_hook",
  "hex",
+ "hyperloglog",
  "js-sys",
  "once_cell",
  "serde",
