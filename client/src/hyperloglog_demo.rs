@@ -1,5 +1,5 @@
-use crate::hyperloglog::HyperLogLog;
 use dioxus::prelude::*;
+use hyperloglog::HyperLogLog;
 use rand::rngs::SmallRng;
 use rand::{RngCore, SeedableRng};
 

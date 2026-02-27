@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 use dioxus_router::{Link, Routable, Router};
 use gloo_net::http::{Request, Response};
+use hyperloglog::{HyperLogLog, DEFAULT_HLL_BITS};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
@@ -97,31 +98,6 @@ struct ExecutableFunction {
     wasm_file_id: i64,
     function_name: String,
     wasm_bytes: Vec<u8>,
-}
-
-struct LocalHyperLogLog {
-    bits: u8,
-    hashes: Vec<u64>,
-}
-
-impl LocalHyperLogLog {
-    fn new(bits: u8) -> Self {
-        let m = 1usize << bits;
-        Self {
-            bits,
-            hashes: vec![u64::MAX; m],
-        }
-    }
-
-    fn add_hash(&mut self, hash: u64) -> bool {
-        let mask = (1usize << self.bits) - 1;
-        let register = (hash as usize) & mask;
-        if hash < self.hashes[register] {
-            self.hashes[register] = hash;
-            return true;
-        }
-        false
-    }
 }
 
 #[wasm_bindgen]
@@ -362,7 +338,7 @@ fn RepoRunner(repository: String, latest_version: Option<String>) -> Element {
                     return;
                 }
 
-                let mut local_hll = HashMap::<i64, LocalHyperLogLog>::new();
+                let mut local_hll = HashMap::<i64, HyperLogLog>::new();
                 let mut state = 0x1234_5678_abcd_ef01u64;
 
                 while is_running() {
@@ -388,7 +364,7 @@ fn RepoRunner(repository: String, latest_version: Option<String>) -> Element {
 
                         let hll = local_hll
                             .entry(executable.function_id)
-                            .or_insert_with(|| LocalHyperLogLog::new(5));
+                            .or_insert_with(|| HyperLogLog::new(DEFAULT_HLL_BITS));
                         if hll.add_hash(hash) {
                             improvements += 1;
                             let function_id = executable.function_id;
