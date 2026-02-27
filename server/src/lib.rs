@@ -1266,26 +1266,50 @@ async fn handle_submit_test_result(mut req: Request, env: Env) -> Result<Respons
 
     let client = connect_to_db(&env).await?;
 
+    // Start a transaction to ensure atomic read-modify-write with row locking
+    client
+        .execute("BEGIN", &[])
+        .await
+        .map_err(|e| Error::RustError(format!("Failed to begin transaction: {}", e)))?;
+
+    let result = handle_submit_test_result_inner(&client, &body, seed, hash).await;
+
+    // Commit or rollback based on result
+    match &result {
+        Ok(_) => {
+            client
+                .execute("COMMIT", &[])
+                .await
+                .map_err(|e| Error::RustError(format!("Failed to commit transaction: {}", e)))?;
+        }
+        Err(_) => {
+            // Best effort rollback on error
+            let _ = client.execute("ROLLBACK", &[]).await;
+        }
+    }
+
+    result
+}
+
+async fn handle_submit_test_result_inner(
+    client: &tokio_postgres::Client,
+    body: &SubmitHashRequest,
+    seed: u64,
+    hash: u64,
+) -> Result<Response> {
     let mut function_id = body.function_id;
-    let mut row = client
+
+    // First, try to find the function by ID without locking (for the common case)
+    let exists = client
         .query_opt(
-            "
-        SELECT
-            id,
-            hll_bits,
-            hll_hashes_json,
-            COALESCE(NULLIF(to_jsonb(wasm_functions)->>'submitted_updates', '')::BIGINT, 0) AS submitted_updates,
-            to_jsonb(wasm_functions)->>'lowest_hash' AS lowest_hash,
-            to_jsonb(wasm_functions)->>'lowest_seed' AS lowest_seed
-        FROM wasm_functions
-        WHERE id = $1
-        ",
+            "SELECT id FROM wasm_functions WHERE id = $1",
             &[&function_id],
         )
         .await
-        .map_err(|e| Error::RustError(format!("Failed querying function HLL: {}", e)))?;
+        .map_err(|e| Error::RustError(format!("Failed checking function existence: {}", e)))?;
 
-    if row.is_none() {
+    // If function doesn't exist by ID, try to create it from wasm_file_id + function_name
+    if exists.is_none() {
         if let (Some(wasm_file_id), Some(function_name)) =
             (body.wasm_file_id, body.function_name.as_ref())
         {
@@ -1332,29 +1356,30 @@ async fn handle_submit_test_result(mut req: Request, env: Env) -> Result<Respons
                         })?;
 
                     function_id = upsert_row.get(0);
-                    row = client
-                        .query_opt(
-                            "
-                        SELECT
-                            id,
-                            hll_bits,
-                            hll_hashes_json,
-                            COALESCE(NULLIF(to_jsonb(wasm_functions)->>'submitted_updates', '')::BIGINT, 0) AS submitted_updates,
-                            to_jsonb(wasm_functions)->>'lowest_hash' AS lowest_hash,
-                            to_jsonb(wasm_functions)->>'lowest_seed' AS lowest_seed
-                        FROM wasm_functions
-                        WHERE id = $1
-                        ",
-                            &[&function_id],
-                        )
-                        .await
-                        .map_err(|e| {
-                            Error::RustError(format!("Failed querying function HLL: {}", e))
-                        })?;
                 }
             }
         }
     }
+
+    // Now lock the row and read the current state atomically using SELECT ... FOR UPDATE
+    let row = client
+        .query_opt(
+            "
+        SELECT
+            id,
+            hll_bits,
+            hll_hashes_json,
+            COALESCE(NULLIF(to_jsonb(wasm_functions)->>'submitted_updates', '')::BIGINT, 0) AS submitted_updates,
+            to_jsonb(wasm_functions)->>'lowest_hash' AS lowest_hash,
+            to_jsonb(wasm_functions)->>'lowest_seed' AS lowest_seed
+        FROM wasm_functions
+        WHERE id = $1
+        FOR UPDATE
+        ",
+            &[&function_id],
+        )
+        .await
+        .map_err(|e| Error::RustError(format!("Failed querying function HLL: {}", e)))?;
 
     let Some(row) = row else {
         return error_response(404, "function_not_found", "Function ID not found");
