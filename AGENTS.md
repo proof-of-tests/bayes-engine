@@ -143,7 +143,7 @@ Lower hash = more leading zeros = rarer event = higher estimate
 
 **Key parameters:**
 
-- `HLL_BITS = 12` (default) -> 4096 registers
+- `HLL_BITS = 5` (default) -> 32 registers
 - `MAX_HLL_BITS = 20` -> up to 1M registers
 - More bits = better precision, more storage
 
@@ -248,7 +248,7 @@ wasm_functions (
   repository_id BIGINT REFERENCES repositories(id),
   version_id BIGINT REFERENCES repository_versions(id),
   function_name TEXT NOT NULL,
-  hll_bits INTEGER DEFAULT 12,
+  hll_bits INTEGER DEFAULT 5,
   hll_hashes_json TEXT,  -- JSON array of min-hashes
   submitted_updates BIGINT DEFAULT 0,
   lowest_hash TEXT,

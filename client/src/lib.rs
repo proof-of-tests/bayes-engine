@@ -388,7 +388,7 @@ fn RepoRunner(repository: String, latest_version: Option<String>) -> Element {
 
                         let hll = local_hll
                             .entry(executable.function_id)
-                            .or_insert_with(|| LocalHyperLogLog::new(12));
+                            .or_insert_with(|| LocalHyperLogLog::new(5));
                         if hll.add_hash(hash) {
                             improvements += 1;
                             let function_id = executable.function_id;
