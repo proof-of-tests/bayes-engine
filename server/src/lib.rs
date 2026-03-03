@@ -1664,11 +1664,14 @@ async fn fetch(req: Request, env: Env, _ctx: worker::Context) -> Result<Response
         .get_async("/api/repositories", |_req, ctx| async move {
             match handle_list_repositories(ctx.env).await {
                 Ok(response) => Ok(response),
-                Err(err) => error_response(
-                    500,
-                    "internal_error",
-                    format!("Failed listing repositories: {}", err),
-                ),
+                Err(err) => {
+                    console_log!("[ERROR] GET /api/repositories failed: {}", err);
+                    error_response(
+                        500,
+                        "internal_error",
+                        format!("Failed listing repositories: {}", err),
+                    )
+                }
             }
         })
         .get_async("/api/repositories/:owner/:repo", |_req, ctx| async move {
@@ -1683,11 +1686,14 @@ async fn fetch(req: Request, env: Env, _ctx: worker::Context) -> Result<Response
             let repository = format!("{}/{}", owner, repo);
             match handle_repository_detail(ctx.env, repository).await {
                 Ok(response) => Ok(response),
-                Err(err) => error_response(
-                    500,
-                    "internal_error",
-                    format!("Failed loading repository detail: {}", err),
-                ),
+                Err(err) => {
+                    console_log!("[ERROR] GET /api/repositories/:owner/:repo failed: {}", err);
+                    error_response(
+                        500,
+                        "internal_error",
+                        format!("Failed loading repository detail: {}", err),
+                    )
+                }
             }
         })
         .get_async(
@@ -1704,11 +1710,17 @@ async fn fetch(req: Request, env: Env, _ctx: worker::Context) -> Result<Response
                 let repository = format!("{}/{}", owner, repo);
                 match handle_latest_catalog(ctx.env, repository).await {
                     Ok(response) => Ok(response),
-                    Err(err) => error_response(
-                        500,
-                        "internal_error",
-                        format!("Failed loading latest catalog: {}", err),
-                    ),
+                    Err(err) => {
+                        console_log!(
+                            "[ERROR] GET /api/repositories/:owner/:repo/latest-catalog failed: {}",
+                            err
+                        );
+                        error_response(
+                            500,
+                            "internal_error",
+                            format!("Failed loading latest catalog: {}", err),
+                        )
+                    }
                 }
             },
         )
@@ -1729,11 +1741,14 @@ async fn fetch(req: Request, env: Env, _ctx: worker::Context) -> Result<Response
         .post_async("/api/test-results", |req, ctx| async move {
             match handle_submit_test_result(req, ctx.env).await {
                 Ok(response) => Ok(response),
-                Err(err) => error_response(
-                    500,
-                    "internal_error",
-                    format!("Failed submitting test result: {}", err),
-                ),
+                Err(err) => {
+                    console_log!("[ERROR] POST /api/test-results failed: {}", err);
+                    error_response(
+                        500,
+                        "internal_error",
+                        format!("Failed submitting test result: {}", err),
+                    )
+                }
             }
         })
         .post_async("/api/ci-upload", |req, ctx| async move {
