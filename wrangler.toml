@@ -27,12 +27,12 @@ bucket_name = "bayes-engine-wasm"
 [[d1_databases]]
 binding = "HLL_DB"
 database_name = "bayes-hll"
-database_id = "placeholder-will-be-created"
+database_id = "9cd24ff8-b474-4e54-b39c-95b64e69598d"
 
 # KV namespace for catalog data (repositories, versions, files)
 [[kv_namespaces]]
 binding = "CATALOG"
-id = "placeholder-will-be-created"
+id = "bac024a159b944af9daa286392c7be26"
 
 # Production environment - includes custom domain routes
 [env.production]
@@ -50,11 +50,11 @@ bucket_name = "bayes-engine-wasm"
 [[env.production.d1_databases]]
 binding = "HLL_DB"
 database_name = "bayes-hll"
-database_id = "placeholder-will-be-created"
+database_id = "9cd24ff8-b474-4e54-b39c-95b64e69598d"
 
 [[env.production.kv_namespaces]]
 binding = "CATALOG"
-id = "placeholder-will-be-created"
+id = "bac024a159b944af9daa286392c7be26"
 
 [env.production.assets]
 directory = "result/assets"
@@ -74,11 +74,11 @@ bucket_name = "bayes-engine-wasm"
 [[env.e2e.d1_databases]]
 binding = "HLL_DB"
 database_name = "bayes-hll"
-database_id = "placeholder-will-be-created"
+database_id = "9cd24ff8-b474-4e54-b39c-95b64e69598d"
 
 [[env.e2e.kv_namespaces]]
 binding = "CATALOG"
-id = "placeholder-will-be-created"
+id = "bac024a159b944af9daa286392c7be26"
 
 [env.e2e.assets]
 directory = "result/assets"
