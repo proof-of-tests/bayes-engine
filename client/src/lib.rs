@@ -29,20 +29,21 @@ struct RepositorySummary {
     github_repo: String,
     latest_version: Option<String>,
     latest_estimated_tests: f64,
+    #[allow(dead_code)]
     total_estimated_tests: f64,
     version_count: usize,
     file_count: usize,
     function_count: usize,
-    submitted_updates: i64,
 }
 
 #[derive(Clone, Deserialize)]
 struct RepositoryDetailResponse {
+    #[allow(dead_code)]
     repository: String,
+    #[allow(dead_code)]
     latest_version: Option<String>,
     total_estimated_tests: f64,
     latest_estimated_tests: f64,
-    submitted_updates: i64,
     versions: Vec<VersionSummary>,
 }
 
@@ -51,7 +52,6 @@ struct VersionSummary {
     version: String,
     is_latest: bool,
     estimated_tests: f64,
-    submitted_updates: i64,
     file_count: usize,
     function_count: usize,
     files: Vec<WasmFileSummary>,
@@ -70,8 +70,8 @@ struct FunctionSummary {
     #[allow(dead_code)]
     r2_key: String,
     name: String,
+    #[allow(dead_code)]
     estimated_tests: f64,
-    submitted_updates: i64,
 }
 
 #[derive(Clone, Deserialize)]
@@ -182,9 +182,7 @@ fn render_repo_card(repo: RepositorySummary) -> Element {
         article { class: "repo-card",
             h2 { class: "repo-name", "{repo.github_repo}" }
             p { class: "repo-main-metric", "Latest estimate: {format_estimate(repo.latest_estimated_tests)} tests" }
-            p { class: "repo-metric", "All versions: {format_estimate(repo.total_estimated_tests)}" }
             p { class: "repo-metric", "Versions: {repo.version_count} | Files: {repo.file_count} | Functions: {repo.function_count}" }
-            p { class: "repo-metric", "Submitted improvements: {repo.submitted_updates}" }
             if let Some(version) = repo.latest_version.clone() {
                 p { class: "repo-version", "Latest version: {version}" }
             }
@@ -258,11 +256,10 @@ fn Repo(owner: String, repo: String) -> Element {
             if let Some(detail) = data() {
                 p { class: "detail-summary", "Total estimated tests: {format_estimate(detail.total_estimated_tests)}" }
                 p { class: "detail-summary", "Latest version estimate: {format_estimate(detail.latest_estimated_tests)}" }
-                p { class: "detail-summary", "Submitted improvements: {detail.submitted_updates}" }
 
                 RepoRunner {
-                    repository: detail.repository.clone(),
-                    latest_version: detail.latest_version.clone(),
+                    repository: repository.clone(),
+                    latest_version: detail.versions.iter().find(|v| v.is_latest).map(|v| v.version.clone()),
                 }
 
                 div { class: "versions-grid",
@@ -275,7 +272,6 @@ fn Repo(owner: String, repo: String) -> Element {
                                 }
                             }
                             p { "Estimated tests: {format_estimate(version.estimated_tests)}" }
-                            p { "Submitted improvements: {version.submitted_updates}" }
                             p { "Files: {version.file_count} | Functions: {version.function_count}" }
 
                             for file in version.files {
@@ -286,8 +282,6 @@ fn Repo(owner: String, repo: String) -> Element {
                                         for function in file.functions {
                                             li {
                                                 strong { "{function.name}" }
-                                                " · est {format_estimate(function.estimated_tests)}"
-                                                " · updates {function.submitted_updates}"
                                             }
                                         }
                                     }

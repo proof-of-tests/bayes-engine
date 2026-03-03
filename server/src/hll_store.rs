@@ -37,22 +37,6 @@ pub async fn ensure_schema(db: &D1Database) -> Result<()> {
     db.exec("CREATE INDEX IF NOT EXISTS idx_hashes_by_file ON function_hashes(r2_key)")
         .await?;
 
-    db.exec(
-        "CREATE TABLE IF NOT EXISTS function_stats (
-            r2_key TEXT NOT NULL,
-            function_name TEXT NOT NULL,
-            submitted_updates INTEGER DEFAULT 0,
-            lowest_hash TEXT,
-            lowest_seed TEXT,
-            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-            PRIMARY KEY (r2_key, function_name)
-        )",
-    )
-    .await?;
-
-    db.exec("CREATE INDEX IF NOT EXISTS idx_stats_by_file ON function_stats(r2_key)")
-        .await?;
-
     Ok(())
 }
 
@@ -83,25 +67,6 @@ pub async fn get_hll_state(
     }
 
     Ok(hll)
-}
-
-/// Get function stats (submitted_updates, lowest_hash, etc.)
-pub async fn get_function_stats(
-    db: &D1Database,
-    r2_key: &str,
-    function_name: &str,
-) -> Result<Option<FunctionStats>> {
-    let stmt = db.prepare(
-        "SELECT submitted_updates, lowest_hash, lowest_seed FROM function_stats 
-         WHERE r2_key = ? AND function_name = ?",
-    );
-
-    let results = stmt
-        .bind(&[r2_key.into(), function_name.into()])?
-        .all()
-        .await?;
-    let rows = results.results::<FunctionStats>()?;
-    Ok(rows.into_iter().next())
 }
 
 /// Submit a hash update - atomically updates only if the new hash is lower
@@ -136,7 +101,7 @@ pub async fn submit_hash(
         function_name.into(),
         (register_idx as i64).into(),
         hash_str.clone().into(),
-        seed_str.clone().into(),
+        seed_str.into(),
     ])?
     .run()
     .await?;
@@ -160,47 +125,7 @@ pub async fn submit_hash(
         .map(|row| row.min_hash == hash_str)
         .unwrap_or(false);
 
-    // Update stats if improved
-    if improved {
-        update_stats(db, r2_key, function_name, hash, seed).await?;
-    }
-
     Ok(improved)
-}
-
-/// Update function stats after a hash improvement
-async fn update_stats(
-    db: &D1Database,
-    r2_key: &str,
-    function_name: &str,
-    hash: u64,
-    seed: u64,
-) -> Result<()> {
-    let hash_str = format_hash(hash);
-    let seed_str = seed.to_string();
-
-    let stmt = db.prepare(
-        "INSERT INTO function_stats (r2_key, function_name, submitted_updates, lowest_hash, lowest_seed, updated_at)
-         VALUES (?, ?, 1, ?, ?, datetime('now'))
-         ON CONFLICT (r2_key, function_name) DO UPDATE SET
-           submitted_updates = function_stats.submitted_updates + 1,
-           lowest_hash = CASE WHEN excluded.lowest_hash < function_stats.lowest_hash OR function_stats.lowest_hash IS NULL 
-                         THEN excluded.lowest_hash ELSE function_stats.lowest_hash END,
-           lowest_seed = CASE WHEN excluded.lowest_hash < function_stats.lowest_hash OR function_stats.lowest_hash IS NULL 
-                         THEN excluded.lowest_seed ELSE function_stats.lowest_seed END,
-           updated_at = datetime('now')",
-    );
-
-    stmt.bind(&[
-        r2_key.into(),
-        function_name.into(),
-        hash_str.into(),
-        seed_str.into(),
-    ])?
-    .run()
-    .await?;
-
-    Ok(())
 }
 
 /// Initialize HLL registers for a new function (all set to MAX)
@@ -227,15 +152,6 @@ pub async fn init_function_registers(
         .await?;
     }
 
-    // Initialize stats entry
-    let stmt = db.prepare(
-        "INSERT OR IGNORE INTO function_stats (r2_key, function_name, submitted_updates, updated_at)
-         VALUES (?, ?, 0, datetime('now'))",
-    );
-    stmt.bind(&[r2_key.into(), function_name.into()])?
-        .run()
-        .await?;
-
     Ok(())
 }
 
@@ -243,7 +159,7 @@ pub async fn init_function_registers(
 pub async fn get_file_hll_states(
     db: &D1Database,
     r2_key: &str,
-) -> Result<Vec<(String, HyperLogLog, FunctionStats)>> {
+) -> Result<Vec<(String, HyperLogLog)>> {
     // Get all unique function names for this file
     let stmt = db.prepare(
         "SELECT DISTINCT function_name FROM function_hashes WHERE r2_key = ? ORDER BY function_name",
@@ -258,14 +174,7 @@ pub async fn get_file_hll_states(
     let mut states = Vec::new();
     for function_name in function_names {
         let hll = get_hll_state(db, r2_key, &function_name).await?;
-        let stats = get_function_stats(db, r2_key, &function_name)
-            .await?
-            .unwrap_or(FunctionStats {
-                submitted_updates: 0,
-                lowest_hash: None,
-                lowest_seed: None,
-            });
-        states.push((function_name, hll, stats));
+        states.push((function_name, hll));
     }
 
     Ok(states)
@@ -286,12 +195,4 @@ struct MinHashRow {
 #[derive(serde::Deserialize)]
 struct FunctionNameRow {
     function_name: String,
-}
-
-#[derive(serde::Deserialize, Clone)]
-pub struct FunctionStats {
-    pub submitted_updates: i64,
-    pub lowest_hash: Option<String>,
-    #[allow(dead_code)]
-    pub lowest_seed: Option<String>,
 }

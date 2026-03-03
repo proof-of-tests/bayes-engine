@@ -4,7 +4,6 @@ mod hll_store;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use catalog::{FileMetadata, RepoMetadata, VersionMetadata};
-use hll_store::FunctionStats;
 use hyperloglog::DEFAULT_HLL_BITS;
 use js_sys::{Array, Function, Object, Reflect, Uint8Array};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -54,8 +53,6 @@ struct FunctionSummary {
     r2_key: String,
     name: String,
     estimated_tests: f64,
-    submitted_updates: i64,
-    lowest_hash: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -71,7 +68,6 @@ struct VersionSummary {
     version: String,
     is_latest: bool,
     estimated_tests: f64,
-    submitted_updates: i64,
     file_count: usize,
     function_count: usize,
     files: Vec<WasmFileSummary>,
@@ -86,7 +82,6 @@ struct RepositorySummary {
     version_count: usize,
     file_count: usize,
     function_count: usize,
-    submitted_updates: i64,
 }
 
 #[derive(Serialize)]
@@ -105,7 +100,6 @@ struct RepositoryDetailResponse {
     latest_version: Option<String>,
     total_estimated_tests: f64,
     latest_estimated_tests: f64,
-    submitted_updates: i64,
     versions: Vec<VersionSummary>,
 }
 
@@ -122,7 +116,6 @@ struct SubmitHashResponse {
     ok: bool,
     improved: bool,
     estimated_tests: f64,
-    submitted_updates: i64,
 }
 
 #[derive(Serialize)]
@@ -743,7 +736,6 @@ async fn handle_list_repositories(env: Env) -> Result<Response> {
     for repo_name in &repo_names {
         if let Some(repo_meta) = catalog::get_repo(&kv, repo_name).await? {
             let mut repo_estimated_tests = 0.0;
-            let mut repo_submitted_updates = 0i64;
             let mut repo_file_count = 0usize;
             let mut repo_function_count = 0usize;
             let mut latest_estimated_tests = 0.0;
@@ -758,12 +750,11 @@ async fn handle_list_repositories(env: Env) -> Result<Response> {
 
                         // Get HLL states for this file
                         let states = hll_store::get_file_hll_states(&db, &file.r2_key).await?;
-                        for (_, hll, stats) in &states {
+                        for (_, hll) in &states {
                             repo_function_count += 1;
                             function_count += 1;
                             let estimate = hll.count();
                             repo_estimated_tests += estimate;
-                            repo_submitted_updates += stats.submitted_updates;
 
                             if Some(version.clone()) == repo_meta.latest_version {
                                 latest_estimated_tests += estimate;
@@ -783,7 +774,6 @@ async fn handle_list_repositories(env: Env) -> Result<Response> {
                 version_count: repo_meta.versions.len(),
                 file_count: repo_file_count,
                 function_count: repo_function_count,
-                submitted_updates: repo_submitted_updates,
             });
         }
     }
@@ -819,13 +809,11 @@ async fn handle_repository_detail(env: Env, repository: String) -> Result<Respon
 
     let mut versions = Vec::new();
     let mut total_estimated_tests = 0.0;
-    let mut total_submitted_updates = 0i64;
     let mut latest_estimated_tests = 0.0;
 
     for version_name in &repo_meta.versions {
         if let Some(version_meta) = catalog::get_version(&kv, &repository, version_name).await? {
             let mut version_estimated_tests = 0.0;
-            let mut version_submitted_updates = 0i64;
             let mut files = Vec::new();
 
             for file in &version_meta.files {
@@ -833,17 +821,14 @@ async fn handle_repository_detail(env: Env, repository: String) -> Result<Respon
 
                 let functions: Vec<FunctionSummary> = states
                     .iter()
-                    .map(|(name, hll, stats)| {
+                    .map(|(name, hll)| {
                         let estimate = hll.count();
                         version_estimated_tests += estimate;
-                        version_submitted_updates += stats.submitted_updates;
 
                         FunctionSummary {
                             r2_key: file.r2_key.clone(),
                             name: name.clone(),
                             estimated_tests: estimate,
-                            submitted_updates: stats.submitted_updates,
-                            lowest_hash: stats.lowest_hash.clone(),
                         }
                     })
                     .collect();
@@ -862,13 +847,11 @@ async fn handle_repository_detail(env: Env, repository: String) -> Result<Respon
             }
 
             total_estimated_tests += version_estimated_tests;
-            total_submitted_updates += version_submitted_updates;
 
             versions.push(VersionSummary {
                 version: version_name.clone(),
                 is_latest,
                 estimated_tests: version_estimated_tests,
-                submitted_updates: version_submitted_updates,
                 file_count: files.len(),
                 function_count: files.iter().map(|f| f.functions.len()).sum(),
                 files,
@@ -886,7 +869,6 @@ async fn handle_repository_detail(env: Env, repository: String) -> Result<Respon
             latest_version: repo_meta.latest_version,
             total_estimated_tests,
             latest_estimated_tests,
-            submitted_updates: total_submitted_updates,
             versions,
         },
     )
@@ -917,12 +899,10 @@ async fn handle_latest_catalog(env: Env, repository: String) -> Result<Response>
 
         let functions: Vec<FunctionSummary> = states
             .iter()
-            .map(|(name, hll, stats)| FunctionSummary {
+            .map(|(name, hll)| FunctionSummary {
                 r2_key: file.r2_key.clone(),
                 name: name.clone(),
                 estimated_tests: hll.count(),
-                submitted_updates: stats.submitted_updates,
-                lowest_hash: stats.lowest_hash.clone(),
             })
             .collect();
 
@@ -982,7 +962,7 @@ async fn handle_get_wasm_file_hll_state(env: Env, r2_key: String) -> Result<Resp
 
     let functions: Vec<FunctionHllStateResponse> = states
         .into_iter()
-        .map(|(name, hll, _)| FunctionHllStateResponse {
+        .map(|(name, hll)| FunctionHllStateResponse {
             function_name: name,
             hll_bits: DEFAULT_HLL_BITS,
             hashes: hll.hashes().iter().map(|v| v.to_string()).collect(),
@@ -1020,13 +1000,6 @@ async fn handle_submit_test_result(mut req: Request, env: Env) -> Result<Respons
 
     // Get updated HLL state for the estimate
     let hll = hll_store::get_hll_state(&db, &body.r2_key, &body.function_name).await?;
-    let stats = hll_store::get_function_stats(&db, &body.r2_key, &body.function_name)
-        .await?
-        .unwrap_or(FunctionStats {
-            submitted_updates: 0,
-            lowest_hash: None,
-            lowest_seed: None,
-        });
 
     json_response(
         200,
@@ -1034,7 +1007,6 @@ async fn handle_submit_test_result(mut req: Request, env: Env) -> Result<Respons
             ok: true,
             improved,
             estimated_tests: hll.count(),
-            submitted_updates: stats.submitted_updates,
         },
     )
 }
