@@ -18,14 +18,21 @@ directory = "result/assets"
 # This allows client-side routing to work with direct URL access
 not_found_handling = "single-page-application"
 
-# Hyperdrive database binding for Postgres connectivity
-[[hyperdrive]]
-binding = "HYPERDRIVE"
-id = "a88d53af1e344d80bdd1ab8f88692b14"
-
+# R2 bucket for WASM file storage
 [[r2_buckets]]
 binding = "WASM_BUCKET"
 bucket_name = "bayes-engine-wasm"
+
+# D1 database for HLL hash state (the only mutable data)
+[[d1_databases]]
+binding = "HLL_DB"
+database_name = "bayes-hll"
+database_id = "placeholder-will-be-created"
+
+# KV namespace for catalog data (repositories, versions, files)
+[[kv_namespaces]]
+binding = "CATALOG"
+id = "placeholder-will-be-created"
 
 # Production environment - includes custom domain routes
 [env.production]
@@ -36,13 +43,18 @@ routes = [
 [env.production.observability]
 enabled = true
 
-[[env.production.hyperdrive]]
-binding = "HYPERDRIVE"
-id = "a88d53af1e344d80bdd1ab8f88692b14"
-
 [[env.production.r2_buckets]]
 binding = "WASM_BUCKET"
 bucket_name = "bayes-engine-wasm"
+
+[[env.production.d1_databases]]
+binding = "HLL_DB"
+database_name = "bayes-hll"
+database_id = "placeholder-will-be-created"
+
+[[env.production.kv_namespaces]]
+binding = "CATALOG"
+id = "placeholder-will-be-created"
 
 [env.production.assets]
 directory = "result/assets"
@@ -55,15 +67,18 @@ not_found_handling = "single-page-application"
 [env.e2e.observability]
 enabled = true
 
-# Hyperdrive for e2e tests - requires CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE
-# environment variable to be set (e.g., from GitHub secrets)
-[[env.e2e.hyperdrive]]
-binding = "HYPERDRIVE"
-id = "a88d53af1e344d80bdd1ab8f88692b14"
-
 [[env.e2e.r2_buckets]]
 binding = "WASM_BUCKET"
 bucket_name = "bayes-engine-wasm"
+
+[[env.e2e.d1_databases]]
+binding = "HLL_DB"
+database_name = "bayes-hll"
+database_id = "placeholder-will-be-created"
+
+[[env.e2e.kv_namespaces]]
+binding = "CATALOG"
+id = "placeholder-will-be-created"
 
 [env.e2e.assets]
 directory = "result/assets"

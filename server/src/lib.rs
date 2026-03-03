@@ -1,13 +1,14 @@
+mod catalog;
+mod hll_store;
+
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use hyperloglog::{HyperLogLog, DEFAULT_HLL_BITS};
+use catalog::{FileMetadata, RepoMetadata, VersionMetadata};
+use hll_store::FunctionStats;
+use hyperloglog::DEFAULT_HLL_BITS;
 use js_sys::{Array, Function, Object, Reflect, Uint8Array};
-use once_cell::sync::Lazy;
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap};
-use std::sync::Mutex;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use worker::*;
@@ -17,21 +18,7 @@ const OIDC_CONFIG_URL: &str =
 const EXPECTED_OIDC_ISSUER: &str = "https://token.actions.githubusercontent.com";
 const EXPECTED_OIDC_AUDIENCE: &str = "bayes-engine-ci-upload";
 const GITHUB_API_BASE: &str = "https://api.github.com";
-const REPLAY_TTL_SECS: u64 = 600;
 const MAX_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
-
-static IN_MEMORY_REPLAY: Lazy<Mutex<HashMap<String, u64>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
-
-#[derive(Deserialize)]
-struct UppercaseRequest {
-    text: String,
-}
-
-#[derive(Serialize)]
-struct UppercaseResponse {
-    result: String,
-}
 
 #[derive(Serialize)]
 struct ApiErrorResponse {
@@ -59,14 +46,12 @@ struct CiUploadResponse {
     repository_version: String,
     function_count: usize,
     function_names: Vec<String>,
-    wasm_file_id: Option<i64>,
     r2_key: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 struct FunctionSummary {
-    id: i64,
-    wasm_file_id: i64,
+    r2_key: String,
     name: String,
     estimated_tests: f64,
     submitted_updates: i64,
@@ -75,9 +60,8 @@ struct FunctionSummary {
 
 #[derive(Serialize, Deserialize, Clone)]
 struct WasmFileSummary {
-    id: i64,
+    r2_key: String,
     sha256: String,
-    r2_key: Option<String>,
     uploaded_at: String,
     functions: Vec<FunctionSummary>,
 }
@@ -127,11 +111,8 @@ struct RepositoryDetailResponse {
 
 #[derive(Deserialize)]
 struct SubmitHashRequest {
-    function_id: i64,
-    #[serde(default)]
-    wasm_file_id: Option<i64>,
-    #[serde(default)]
-    function_name: Option<String>,
+    r2_key: String,
+    function_name: String,
     seed: String,
     hash: String,
 }
@@ -153,7 +134,6 @@ struct UploadCatalogResponse {
 
 #[derive(Serialize)]
 struct FunctionHllStateResponse {
-    function_id: i64,
     function_name: String,
     hll_bits: u8,
     hashes: Vec<String>,
@@ -161,7 +141,7 @@ struct FunctionHllStateResponse {
 
 #[derive(Serialize)]
 struct WasmFileHllStateResponse {
-    wasm_file_id: i64,
+    r2_key: String,
     functions: Vec<FunctionHllStateResponse>,
 }
 
@@ -247,33 +227,6 @@ struct OidcClaims {
 #[derive(Debug, Deserialize)]
 struct GitHubRepoResponse {
     private: bool,
-}
-
-/// Establishes a connection to the Postgres database via Hyperdrive
-async fn connect_to_db(env: &Env) -> Result<tokio_postgres::Client> {
-    let hyperdrive = env.hyperdrive("HYPERDRIVE")?;
-
-    let socket = Socket::builder()
-        .secure_transport(SecureTransport::StartTls)
-        .connect(hyperdrive.host(), hyperdrive.port())?;
-
-    let config = hyperdrive
-        .connection_string()
-        .parse::<tokio_postgres::Config>()
-        .map_err(|e| Error::RustError(format!("Failed to parse connection string: {}", e)))?;
-
-    let (client, connection) = config
-        .connect_raw(socket, tokio_postgres::NoTls)
-        .await
-        .map_err(|e| Error::RustError(format!("Failed to connect to database: {}", e)))?;
-
-    wasm_bindgen_futures::spawn_local(async move {
-        if let Err(error) = connection.await {
-            console_log!("Database connection error: {:?}", error);
-        }
-    });
-
-    Ok(client)
 }
 
 fn now_unix_secs() -> u64 {
@@ -445,7 +398,7 @@ fn extract_bearer_token(req: &Request) -> std::result::Result<String, ApiError> 
     Ok(token.to_string())
 }
 
-async fn fetch_json<T: DeserializeOwned>(
+async fn fetch_json<T: serde::de::DeserializeOwned>(
     url: &str,
     headers: &[(&str, &str)],
 ) -> std::result::Result<T, ApiError> {
@@ -659,48 +612,6 @@ fn normalize_optional_value(value: &Option<serde_json::Value>) -> Option<String>
     }
 }
 
-async fn check_and_mark_replay(env: &Env, jti: &str) -> std::result::Result<bool, ApiError> {
-    let key_hash = Sha256::digest(jti.as_bytes());
-    let replay_key = format!("ci-jti:{}", hex::encode(key_hash));
-
-    if let Ok(kv) = env.kv("CI_REPLAY") {
-        let existing = kv
-            .get(&replay_key)
-            .text()
-            .await
-            .map_err(|e| ApiError::new(500, "kv_read_failed", format!("{:?}", e)))?;
-
-        if existing.is_some() {
-            return Ok(true);
-        }
-
-        kv.put(&replay_key, "1")
-            .map_err(|e| ApiError::new(500, "kv_write_failed", format!("{:?}", e)))?
-            .expiration_ttl(REPLAY_TTL_SECS)
-            .execute()
-            .await
-            .map_err(|e| ApiError::new(500, "kv_write_failed", format!("{:?}", e)))?;
-
-        return Ok(false);
-    }
-
-    let now = now_unix_secs();
-    let mut entries = IN_MEMORY_REPLAY
-        .lock()
-        .map_err(|_| ApiError::new(500, "replay_lock_failed", "Replay cache lock failed"))?;
-
-    entries.retain(|_, expires_at| *expires_at > now);
-
-    if let Some(expires_at) = entries.get(&replay_key) {
-        if *expires_at > now {
-            return Ok(true);
-        }
-    }
-
-    entries.insert(replay_key, now + REPLAY_TTL_SECS);
-    Ok(false)
-}
-
 fn validate_wasm(file_bytes: &[u8]) -> std::result::Result<(), ApiError> {
     if file_bytes.len() < 4 || &file_bytes[0..4] != b"\0asm" {
         return Err(ApiError::new(
@@ -767,6 +678,7 @@ async fn store_wasm_in_r2(
     env: &Env,
     r2_key: &str,
     file_bytes: &[u8],
+    metadata: &R2WasmMetadata,
 ) -> std::result::Result<(), ApiError> {
     let bucket = env.bucket("WASM_BUCKET").map_err(|_| {
         ApiError::new(
@@ -776,119 +688,29 @@ async fn store_wasm_in_r2(
         )
     })?;
 
+    // Store metadata as custom metadata on the R2 object
+    let metadata_json = serde_json::to_string(metadata).unwrap_or_else(|_| "{}".to_string());
+
     bucket
         .put(r2_key, file_bytes.to_vec())
         .http_metadata(HttpMetadata {
             content_type: Some("application/wasm".to_string()),
             ..Default::default()
         })
+        .custom_metadata([("bayes-metadata".to_string(), metadata_json)])
         .execute()
         .await
         .map_err(|e| ApiError::new(500, "r2_put_failed", format!("{}", e)))?;
     Ok(())
 }
 
-async fn insert_wasm_catalog(
-    client: &tokio_postgres::Client,
-    repository: &str,
-    version: &str,
-    file_sha256: &str,
-    r2_key: Option<&str>,
-    function_names: &[String],
-) -> std::result::Result<(i64, Vec<(i64, String)>), ApiError> {
-    let repo_row = client
-        .query_one(
-            "
-        INSERT INTO repositories (github_repo)
-        VALUES ($1)
-        ON CONFLICT (github_repo) DO UPDATE SET github_repo = EXCLUDED.github_repo
-        RETURNING id
-        ",
-            &[&repository],
-        )
-        .await
-        .map_err(|e| {
-            ApiError::new(
-                500,
-                "db_error",
-                format!("Failed upserting repository: {}", e),
-            )
-        })?;
-    let repository_id: i64 = repo_row.get(0);
-
-    let version_row = client
-        .query_one(
-            "
-        INSERT INTO repository_versions (repository_id, version)
-        VALUES ($1, $2)
-        ON CONFLICT (repository_id, version) DO UPDATE SET version = EXCLUDED.version
-        RETURNING id
-        ",
-            &[&repository_id, &version],
-        )
-        .await
-        .map_err(|e| ApiError::new(500, "db_error", format!("Failed upserting version: {}", e)))?;
-    let version_id: i64 = version_row.get(0);
-
-    let file_row = client
-        .query_one(
-            "
-        INSERT INTO wasm_files (repository_id, version_id, file_sha256, r2_key)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (repository_id, version_id, file_sha256)
-        DO UPDATE SET r2_key = EXCLUDED.r2_key, uploaded_at = NOW()
-        RETURNING id
-        ",
-            &[&repository_id, &version_id, &file_sha256, &r2_key],
-        )
-        .await
-        .map_err(|e| {
-            ApiError::new(
-                500,
-                "db_error",
-                format!("Failed upserting wasm file: {}", e),
-            )
-        })?;
-    let wasm_file_id: i64 = file_row.get(0);
-
-    let mut function_rows = Vec::new();
-    let default_hll = HyperLogLog::new(DEFAULT_HLL_BITS).to_json();
-
-    for function_name in function_names {
-        let row = client
-            .query_one(
-                "
-            INSERT INTO wasm_functions (
-                wasm_file_id, repository_id, version_id, function_name, hll_bits, hll_hashes_json
-            )
-            VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (wasm_file_id, function_name)
-            DO UPDATE SET function_name = EXCLUDED.function_name
-            RETURNING id, function_name
-            ",
-                &[
-                    &wasm_file_id,
-                    &repository_id,
-                    &version_id,
-                    &function_name,
-                    &(DEFAULT_HLL_BITS as i32),
-                    &default_hll,
-                ],
-            )
-            .await
-            .map_err(|e| {
-                ApiError::new(
-                    500,
-                    "db_error",
-                    format!("Failed upserting function {}: {}", function_name, e),
-                )
-            })?;
-        let function_id: i64 = row.get(0);
-        let function_name: String = row.get(1);
-        function_rows.push((function_id, function_name));
-    }
-
-    Ok((wasm_file_id, function_rows))
+#[derive(Serialize, Deserialize)]
+struct R2WasmMetadata {
+    repository: String,
+    version: String,
+    sha256: String,
+    uploaded_at: String,
+    functions: Vec<String>,
 }
 
 fn parse_u64_string(value: &str, field_name: &'static str) -> std::result::Result<u64, ApiError> {
@@ -901,147 +723,16 @@ fn parse_u64_string(value: &str, field_name: &'static str) -> std::result::Resul
     })
 }
 
-fn build_repository_detail(
-    rows: &[tokio_postgres::Row],
-    repository: &str,
-) -> RepositoryDetailResponse {
-    let mut versions_map: BTreeMap<String, VersionSummary> = BTreeMap::new();
-    let mut latest_version: Option<String> = None;
-    let mut latest_uploaded_at = String::new();
-    let mut total_estimated_tests = 0.0;
-    let mut submitted_updates = 0i64;
-
-    for row in rows {
-        let version: String = row.get("version");
-        let uploaded_at: String = row.get("uploaded_at");
-        let file_id: i64 = row.get("file_id");
-        let file_sha256: String = row.get("file_sha256");
-        let r2_key: Option<String> = row.get("r2_key");
-        let function_id: Option<i64> = row.get("function_id");
-        let function_name: Option<String> = row.get("function_name");
-        let hll_bits: Option<i32> = row.get("hll_bits");
-        let hll_hashes_json: Option<String> = row.get("hll_hashes_json");
-        let function_updates: Option<i64> = row.get("submitted_updates");
-        let lowest_hash: Option<String> = row.get("lowest_hash");
-
-        let version_entry = versions_map
-            .entry(version.clone())
-            .or_insert_with(|| VersionSummary {
-                version: version.clone(),
-                is_latest: false,
-                estimated_tests: 0.0,
-                submitted_updates: 0,
-                file_count: 0,
-                function_count: 0,
-                files: Vec::new(),
-            });
-
-        if version_entry.files.iter().all(|file| file.id != file_id) {
-            version_entry.file_count += 1;
-            version_entry.files.push(WasmFileSummary {
-                id: file_id,
-                sha256: file_sha256,
-                r2_key,
-                uploaded_at: uploaded_at.clone(),
-                functions: Vec::new(),
-            });
-        }
-
-        if uploaded_at > latest_uploaded_at {
-            latest_uploaded_at = uploaded_at.clone();
-            latest_version = Some(version.clone());
-        }
-
-        if let (Some(fid), Some(name), Some(bits), Some(hll_json)) =
-            (function_id, function_name, hll_bits, hll_hashes_json)
-        {
-            if let Some(file) = version_entry
-                .files
-                .iter_mut()
-                .find(|file| file.id == file_id)
-            {
-                if file.functions.iter().all(|f| f.id != fid) {
-                    let hll = HyperLogLog::from_json(bits as u8, &hll_json);
-                    let estimate = hll.count();
-                    let updates = function_updates.unwrap_or(0);
-                    file.functions.push(FunctionSummary {
-                        id: fid,
-                        wasm_file_id: file_id,
-                        name,
-                        estimated_tests: estimate,
-                        submitted_updates: updates,
-                        lowest_hash,
-                    });
-                    version_entry.function_count += 1;
-                    version_entry.estimated_tests += estimate;
-                    version_entry.submitted_updates += updates;
-                    total_estimated_tests += estimate;
-                    submitted_updates += updates;
-                }
-            }
-        }
-    }
-
-    let latest_version_value = latest_version.clone();
-    let mut versions: Vec<VersionSummary> = versions_map.into_values().collect();
-    for version in &mut versions {
-        if Some(version.version.clone()) == latest_version_value {
-            version.is_latest = true;
-        }
-    }
-    versions.sort_by(|a, b| b.version.cmp(&a.version));
-
-    let latest_estimated_tests = versions
-        .iter()
-        .find(|version| version.is_latest)
-        .map(|version| version.estimated_tests)
-        .unwrap_or(0.0);
-
-    RepositoryDetailResponse {
-        repository: repository.to_string(),
-        latest_version,
-        total_estimated_tests,
-        latest_estimated_tests,
-        submitted_updates,
-        versions,
-    }
-}
-
 async fn handle_list_repositories(env: Env) -> Result<Response> {
-    let client = connect_to_db(&env).await?;
+    let kv = env.kv("CATALOG")?;
+    let db = env.d1("HLL_DB")?;
 
-    let rows = client
-        .query(
-            "
-        SELECT
-            r.github_repo,
-            rv.version,
-            to_char(wf.uploaded_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS uploaded_at,
-            wf.id AS file_id,
-            wf.file_sha256,
-            to_jsonb(wf)->>'r2_key' AS r2_key,
-            f.id AS function_id,
-            f.function_name,
-            f.hll_bits,
-            f.hll_hashes_json,
-            NULLIF(to_jsonb(f)->>'submitted_updates', '')::BIGINT AS submitted_updates,
-            to_jsonb(f)->>'lowest_hash' AS lowest_hash
-        FROM repositories r
-        JOIN repository_versions rv ON rv.repository_id = r.id
-        JOIN wasm_files wf ON wf.repository_id = r.id AND wf.version_id = rv.id
-        LEFT JOIN wasm_functions f ON f.wasm_file_id = wf.id
-        ORDER BY r.github_repo, wf.uploaded_at DESC
-        ",
-            &[],
-        )
-        .await
-        .map_err(|e| Error::RustError(format!("Failed querying repositories: {}", e)))?;
-
-    let mut grouped_rows: BTreeMap<String, Vec<tokio_postgres::Row>> = BTreeMap::new();
-    for row in rows {
-        let repo: String = row.get("github_repo");
-        grouped_rows.entry(repo).or_default().push(row);
+    // Ensure schema exists
+    if let Err(e) = hll_store::ensure_schema(&db).await {
+        console_log!("[WARN] Failed to ensure D1 schema: {:?}", e);
     }
+
+    let repo_names = catalog::list_repos(&kv).await?;
 
     let mut repositories = Vec::new();
     let mut total_estimated_tests = 0.0;
@@ -1049,26 +740,55 @@ async fn handle_list_repositories(env: Env) -> Result<Response> {
     let mut file_count = 0usize;
     let mut function_count = 0usize;
 
-    for (repo, repo_rows) in &grouped_rows {
-        let detail = build_repository_detail(repo_rows, repo);
-        let summary = RepositorySummary {
-            github_repo: detail.repository.clone(),
-            latest_version: detail.latest_version.clone(),
-            latest_estimated_tests: detail.latest_estimated_tests,
-            total_estimated_tests: detail.total_estimated_tests,
-            version_count: detail.versions.len(),
-            file_count: detail.versions.iter().map(|v| v.file_count).sum(),
-            function_count: detail.versions.iter().map(|v| v.function_count).sum(),
-            submitted_updates: detail.submitted_updates,
-        };
+    for repo_name in &repo_names {
+        if let Some(repo_meta) = catalog::get_repo(&kv, repo_name).await? {
+            let mut repo_estimated_tests = 0.0;
+            let mut repo_submitted_updates = 0i64;
+            let mut repo_file_count = 0usize;
+            let mut repo_function_count = 0usize;
+            let mut latest_estimated_tests = 0.0;
 
-        total_estimated_tests += summary.total_estimated_tests;
-        version_count += summary.version_count;
-        file_count += summary.file_count;
-        function_count += summary.function_count;
-        repositories.push(summary);
+            for version in &repo_meta.versions {
+                if let Some(version_meta) = catalog::get_version(&kv, repo_name, version).await? {
+                    version_count += 1;
+
+                    for file in &version_meta.files {
+                        repo_file_count += 1;
+                        file_count += 1;
+
+                        // Get HLL states for this file
+                        let states = hll_store::get_file_hll_states(&db, &file.r2_key).await?;
+                        for (_, hll, stats) in &states {
+                            repo_function_count += 1;
+                            function_count += 1;
+                            let estimate = hll.count();
+                            repo_estimated_tests += estimate;
+                            repo_submitted_updates += stats.submitted_updates;
+
+                            if Some(version.clone()) == repo_meta.latest_version {
+                                latest_estimated_tests += estimate;
+                            }
+                        }
+                    }
+                }
+            }
+
+            total_estimated_tests += repo_estimated_tests;
+
+            repositories.push(RepositorySummary {
+                github_repo: repo_name.clone(),
+                latest_version: repo_meta.latest_version.clone(),
+                latest_estimated_tests,
+                total_estimated_tests: repo_estimated_tests,
+                version_count: repo_meta.versions.len(),
+                file_count: repo_file_count,
+                function_count: repo_function_count,
+                submitted_updates: repo_submitted_updates,
+            });
+        }
     }
 
+    // Sort by latest_estimated_tests descending
     repositories.sort_by(|a, b| {
         b.latest_estimated_tests
             .partial_cmp(&a.latest_estimated_tests)
@@ -1089,64 +809,130 @@ async fn handle_list_repositories(env: Env) -> Result<Response> {
 }
 
 async fn handle_repository_detail(env: Env, repository: String) -> Result<Response> {
-    let client = connect_to_db(&env).await?;
+    let kv = env.kv("CATALOG")?;
+    let db = env.d1("HLL_DB")?;
 
-    let rows = client
-        .query(
-            "
-        SELECT
-            r.github_repo,
-            rv.version,
-            to_char(wf.uploaded_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS uploaded_at,
-            wf.id AS file_id,
-            wf.file_sha256,
-            to_jsonb(wf)->>'r2_key' AS r2_key,
-            f.id AS function_id,
-            f.function_name,
-            f.hll_bits,
-            f.hll_hashes_json,
-            NULLIF(to_jsonb(f)->>'submitted_updates', '')::BIGINT AS submitted_updates,
-            to_jsonb(f)->>'lowest_hash' AS lowest_hash
-        FROM repositories r
-        JOIN repository_versions rv ON rv.repository_id = r.id
-        JOIN wasm_files wf ON wf.repository_id = r.id AND wf.version_id = rv.id
-        LEFT JOIN wasm_functions f ON f.wasm_file_id = wf.id
-        WHERE r.github_repo = $1
-        ORDER BY wf.uploaded_at DESC
-        ",
-            &[&repository],
-        )
-        .await
-        .map_err(|e| Error::RustError(format!("Failed querying repository details: {}", e)))?;
+    let repo_meta = match catalog::get_repo(&kv, &repository).await? {
+        Some(meta) => meta,
+        None => return error_response(404, "not_found", "Repository not found"),
+    };
 
-    if rows.is_empty() {
-        return error_response(404, "not_found", "Repository not found");
+    let mut versions = Vec::new();
+    let mut total_estimated_tests = 0.0;
+    let mut total_submitted_updates = 0i64;
+    let mut latest_estimated_tests = 0.0;
+
+    for version_name in &repo_meta.versions {
+        if let Some(version_meta) = catalog::get_version(&kv, &repository, version_name).await? {
+            let mut version_estimated_tests = 0.0;
+            let mut version_submitted_updates = 0i64;
+            let mut files = Vec::new();
+
+            for file in &version_meta.files {
+                let states = hll_store::get_file_hll_states(&db, &file.r2_key).await?;
+
+                let functions: Vec<FunctionSummary> = states
+                    .iter()
+                    .map(|(name, hll, stats)| {
+                        let estimate = hll.count();
+                        version_estimated_tests += estimate;
+                        version_submitted_updates += stats.submitted_updates;
+
+                        FunctionSummary {
+                            r2_key: file.r2_key.clone(),
+                            name: name.clone(),
+                            estimated_tests: estimate,
+                            submitted_updates: stats.submitted_updates,
+                            lowest_hash: stats.lowest_hash.clone(),
+                        }
+                    })
+                    .collect();
+
+                files.push(WasmFileSummary {
+                    r2_key: file.r2_key.clone(),
+                    sha256: file.sha256.clone(),
+                    uploaded_at: file.uploaded_at.clone(),
+                    functions,
+                });
+            }
+
+            let is_latest = Some(version_name.clone()) == repo_meta.latest_version;
+            if is_latest {
+                latest_estimated_tests = version_estimated_tests;
+            }
+
+            total_estimated_tests += version_estimated_tests;
+            total_submitted_updates += version_submitted_updates;
+
+            versions.push(VersionSummary {
+                version: version_name.clone(),
+                is_latest,
+                estimated_tests: version_estimated_tests,
+                submitted_updates: version_submitted_updates,
+                file_count: files.len(),
+                function_count: files.iter().map(|f| f.functions.len()).sum(),
+                files,
+            });
+        }
     }
 
-    let detail = build_repository_detail(&rows, &repository);
-    json_response(200, &detail)
+    // Sort versions descending
+    versions.sort_by(|a, b| b.version.cmp(&a.version));
+
+    json_response(
+        200,
+        &RepositoryDetailResponse {
+            repository,
+            latest_version: repo_meta.latest_version,
+            total_estimated_tests,
+            latest_estimated_tests,
+            submitted_updates: total_submitted_updates,
+            versions,
+        },
+    )
 }
 
 async fn handle_latest_catalog(env: Env, repository: String) -> Result<Response> {
-    let detail_response = handle_repository_detail(env, repository.clone()).await?;
-    if detail_response.status_code() != 200 {
-        return Ok(detail_response);
-    }
-    let mut detail_response = detail_response;
-    let detail: RepositoryDetailResponse = detail_response
-        .json()
-        .await
-        .map_err(|e| Error::RustError(format!("Failed decoding detail JSON: {}", e)))?;
-    let Some(latest_version) = detail.latest_version.clone() else {
-        return error_response(404, "no_versions", "Repository has no uploaded versions");
+    let kv = env.kv("CATALOG")?;
+    let db = env.d1("HLL_DB")?;
+
+    let repo_meta = match catalog::get_repo(&kv, &repository).await? {
+        Some(meta) => meta,
+        None => return error_response(404, "not_found", "Repository not found"),
     };
 
-    let files = detail
-        .versions
-        .iter()
-        .find(|version| version.version == latest_version)
-        .map(|version| version.files.clone())
-        .unwrap_or_default();
+    let latest_version = match &repo_meta.latest_version {
+        Some(v) => v.clone(),
+        None => return error_response(404, "no_versions", "Repository has no uploaded versions"),
+    };
+
+    let version_meta = match catalog::get_version(&kv, &repository, &latest_version).await? {
+        Some(meta) => meta,
+        None => return error_response(404, "version_not_found", "Latest version not found"),
+    };
+
+    let mut files = Vec::new();
+    for file in &version_meta.files {
+        let states = hll_store::get_file_hll_states(&db, &file.r2_key).await?;
+
+        let functions: Vec<FunctionSummary> = states
+            .iter()
+            .map(|(name, hll, stats)| FunctionSummary {
+                r2_key: file.r2_key.clone(),
+                name: name.clone(),
+                estimated_tests: hll.count(),
+                submitted_updates: stats.submitted_updates,
+                lowest_hash: stats.lowest_hash.clone(),
+            })
+            .collect();
+
+        files.push(WasmFileSummary {
+            r2_key: file.r2_key.clone(),
+            sha256: file.sha256.clone(),
+            uploaded_at: file.uploaded_at.clone(),
+            functions,
+        });
+    }
 
     json_response(
         200,
@@ -1158,35 +944,19 @@ async fn handle_latest_catalog(env: Env, repository: String) -> Result<Response>
     )
 }
 
-async fn handle_get_wasm_file(env: Env, wasm_file_id: i64) -> Result<Response> {
-    let client = connect_to_db(&env).await?;
-
-    let row = client
-        .query_opt(
-            "SELECT to_jsonb(wasm_files)->>'r2_key' AS r2_key FROM wasm_files WHERE id = $1",
-            &[&wasm_file_id],
-        )
-        .await
-        .map_err(|e| Error::RustError(format!("Failed querying wasm file metadata: {}", e)))?;
-
-    let Some(row) = row else {
-        return error_response(404, "not_found", "WASM file not found");
-    };
-    let r2_key: Option<String> = row.get(0);
-    let Some(r2_key) = r2_key else {
-        return error_response(404, "missing_object", "WASM file has no persisted object");
-    };
-
+async fn handle_get_wasm_file(env: Env, r2_key: String) -> Result<Response> {
     let bucket = env
         .bucket("WASM_BUCKET")
         .map_err(|_| Error::RustError("Missing R2 bucket binding WASM_BUCKET".to_string()))?;
+
     let object = bucket
-        .get(r2_key)
+        .get(&r2_key)
         .execute()
         .await
         .map_err(|e| Error::RustError(format!("Failed reading object from R2: {}", e)))?;
+
     let Some(object) = object else {
-        return error_response(404, "missing_object", "R2 object not found");
+        return error_response(404, "not_found", "WASM file not found");
     };
 
     let body = object
@@ -1201,53 +971,25 @@ async fn handle_get_wasm_file(env: Env, wasm_file_id: i64) -> Result<Response> {
         .from_bytes(bytes)
 }
 
-async fn handle_get_wasm_file_hll_state(env: Env, wasm_file_id: i64) -> Result<Response> {
-    let client = connect_to_db(&env).await?;
+async fn handle_get_wasm_file_hll_state(env: Env, r2_key: String) -> Result<Response> {
+    let db = env.d1("HLL_DB")?;
 
-    let rows = client
-        .query(
-            "
-        SELECT
-            id,
-            function_name,
-            hll_bits,
-            hll_hashes_json
-        FROM wasm_functions
-        WHERE wasm_file_id = $1
-        ORDER BY id ASC
-        ",
-            &[&wasm_file_id],
-        )
-        .await
-        .map_err(|e| Error::RustError(format!("Failed querying wasm function HLL state: {}", e)))?;
+    let states = hll_store::get_file_hll_states(&db, &r2_key).await?;
 
-    if rows.is_empty() {
+    if states.is_empty() {
         return error_response(404, "not_found", "WASM file has no registered functions");
     }
 
-    let mut functions = Vec::with_capacity(rows.len());
-    for row in rows {
-        let function_id: i64 = row.get("id");
-        let function_name: String = row.get("function_name");
-        let hll_bits: i32 = row.get("hll_bits");
-        let hll_hashes_json: String = row.get("hll_hashes_json");
-        let hll = HyperLogLog::from_json(hll_bits as u8, &hll_hashes_json);
-        let hashes = hll.hashes().iter().map(|v| v.to_string()).collect();
-        functions.push(FunctionHllStateResponse {
-            function_id,
-            function_name,
-            hll_bits: hll_bits as u8,
-            hashes,
-        });
-    }
+    let functions: Vec<FunctionHllStateResponse> = states
+        .into_iter()
+        .map(|(name, hll, _)| FunctionHllStateResponse {
+            function_name: name,
+            hll_bits: DEFAULT_HLL_BITS,
+            hashes: hll.hashes().iter().map(|v| v.to_string()).collect(),
+        })
+        .collect();
 
-    json_response(
-        200,
-        &WasmFileHllStateResponse {
-            wasm_file_id,
-            functions,
-        },
-    )
+    json_response(200, &WasmFileHllStateResponse { r2_key, functions })
 }
 
 async fn handle_submit_test_result(mut req: Request, env: Env) -> Result<Response> {
@@ -1255,6 +997,7 @@ async fn handle_submit_test_result(mut req: Request, env: Env) -> Result<Respons
         .json()
         .await
         .map_err(|e| Error::RustError(format!("Invalid JSON body: {}", e)))?;
+
     let seed = match parse_u64_string(&body.seed, "seed") {
         Ok(value) => value,
         Err(err) => return to_worker_error(err),
@@ -1264,172 +1007,26 @@ async fn handle_submit_test_result(mut req: Request, env: Env) -> Result<Respons
         Err(err) => return to_worker_error(err),
     };
 
-    let client = connect_to_db(&env).await?;
+    let db = env.d1("HLL_DB")?;
 
-    // Note: We intentionally avoid explicit transactions (BEGIN/COMMIT) here because
-    // they cause "connection closed" errors with Hyperdrive's connection pooler when
-    // used with tokio-postgres in CloudFlare Workers. The read-modify-write pattern
-    // may have race conditions under concurrent load, but this is acceptable for HLL
-    // which is designed for approximate counting. Lost updates only slightly reduce
-    // estimation accuracy and do not cause data corruption.
-    handle_submit_test_result_inner(&client, &body, seed, hash).await
-}
-
-async fn handle_submit_test_result_inner(
-    client: &tokio_postgres::Client,
-    body: &SubmitHashRequest,
-    seed: u64,
-    hash: u64,
-) -> Result<Response> {
-    let mut function_id = body.function_id;
-
-    // First, try to find the function by ID without locking (for the common case)
-    let exists = client
-        .query_opt(
-            "SELECT id FROM wasm_functions WHERE id = $1",
-            &[&function_id],
-        )
-        .await
-        .map_err(|e| Error::RustError(format!("Failed checking function existence: {}", e)))?;
-
-    // If function doesn't exist by ID, try to create it from wasm_file_id + function_name
-    if exists.is_none() {
-        if let (Some(wasm_file_id), Some(function_name)) =
-            (body.wasm_file_id, body.function_name.as_ref())
-        {
-            let name = function_name.trim();
-            if !name.is_empty() {
-                let file_row = client
-                    .query_opt(
-                        "SELECT repository_id, version_id FROM wasm_files WHERE id = $1",
-                        &[&wasm_file_id],
-                    )
-                    .await
-                    .map_err(|e| {
-                        Error::RustError(format!("Failed querying wasm file metadata: {}", e))
-                    })?;
-
-                if let Some(file_row) = file_row {
-                    let repository_id: i64 = file_row.get("repository_id");
-                    let version_id: i64 = file_row.get("version_id");
-                    let default_hll = HyperLogLog::new(DEFAULT_HLL_BITS).to_json();
-
-                    let upsert_row = client
-                        .query_one(
-                            "
-                        INSERT INTO wasm_functions (
-                            wasm_file_id, repository_id, version_id, function_name, hll_bits, hll_hashes_json
-                        )
-                        VALUES ($1, $2, $3, $4, $5, $6)
-                        ON CONFLICT (wasm_file_id, function_name)
-                        DO UPDATE SET function_name = EXCLUDED.function_name
-                        RETURNING id
-                        ",
-                            &[
-                                &wasm_file_id,
-                                &repository_id,
-                                &version_id,
-                                &name,
-                                &(DEFAULT_HLL_BITS as i32),
-                                &default_hll,
-                            ],
-                        )
-                        .await
-                        .map_err(|e| {
-                            Error::RustError(format!("Failed upserting function metadata: {}", e))
-                        })?;
-
-                    function_id = upsert_row.get(0);
-                }
-            }
-        }
+    // Ensure schema exists
+    if let Err(e) = hll_store::ensure_schema(&db).await {
+        console_log!("[WARN] Failed to ensure D1 schema: {:?}", e);
     }
 
-    // Read current HLL state (without row locking since we're not using transactions)
-    let row = client
-        .query_opt(
-            "
-        SELECT
-            id,
-            hll_bits,
-            hll_hashes_json,
-            submitted_updates,
-            lowest_hash,
-            lowest_seed
-        FROM wasm_functions
-        WHERE id = $1
-        ",
-            &[&function_id],
-        )
-        .await
-        .map_err(|e| Error::RustError(format!("Failed querying function HLL: {}", e)))?;
+    // Submit the hash atomically
+    let improved =
+        hll_store::submit_hash(&db, &body.r2_key, &body.function_name, seed, hash).await?;
 
-    let Some(row) = row else {
-        return error_response(404, "function_not_found", "Function ID not found");
-    };
-
-    let hll_bits: i32 = row.get("hll_bits");
-    let hll_bits = u8::try_from(hll_bits).unwrap_or(DEFAULT_HLL_BITS);
-    let hll_json: String = row.get("hll_hashes_json");
-    let submitted_updates: i64 = row.get("submitted_updates");
-    let current_lowest_hash: Option<String> = row.get("lowest_hash");
-    let current_lowest_seed: Option<String> = row.get("lowest_seed");
-
-    let mut hll = HyperLogLog::from_json(hll_bits, &hll_json);
-    let improved = hll.add_hash(hash);
-    if improved {
-        let new_hll_json = hll.to_json();
-        let next_updates = submitted_updates + 1;
-        let (lowest_hash, lowest_seed) = if let Some(existing) = current_lowest_hash {
-            let existing_hash = existing.parse::<u64>().unwrap_or(u64::MAX);
-            if hash < existing_hash {
-                (hash.to_string(), seed.to_string())
-            } else {
-                (
-                    existing,
-                    current_lowest_seed.unwrap_or_else(|| seed.to_string()),
-                )
-            }
-        } else {
-            (hash.to_string(), seed.to_string())
-        };
-        let rich_update = client
-            .execute(
-                "
-            UPDATE wasm_functions
-            SET
-                hll_hashes_json = $1,
-                submitted_updates = $2,
-                lowest_hash = $3,
-                lowest_seed = $4,
-                updated_at = NOW()
-            WHERE id = $5
-            ",
-                &[
-                    &new_hll_json,
-                    &next_updates,
-                    &lowest_hash,
-                    &lowest_seed,
-                    &function_id,
-                ],
-            )
-            .await;
-
-        if rich_update.is_err() {
-            client
-                .execute(
-                    "UPDATE wasm_functions SET hll_hashes_json = $1 WHERE id = $2",
-                    &[&new_hll_json, &function_id],
-                )
-                .await
-                .map_err(|e| {
-                    Error::RustError(format!(
-                        "Failed updating function HLL (fallback mode): {}",
-                        e
-                    ))
-                })?;
-        }
-    }
+    // Get updated HLL state for the estimate
+    let hll = hll_store::get_hll_state(&db, &body.r2_key, &body.function_name).await?;
+    let stats = hll_store::get_function_stats(&db, &body.r2_key, &body.function_name)
+        .await?
+        .unwrap_or(FunctionStats {
+            submitted_updates: 0,
+            lowest_hash: None,
+            lowest_seed: None,
+        });
 
     json_response(
         200,
@@ -1437,11 +1034,7 @@ async fn handle_submit_test_result_inner(
             ok: true,
             improved,
             estimated_tests: hll.count(),
-            submitted_updates: if improved {
-                submitted_updates + 1
-            } else {
-                submitted_updates
-            },
+            submitted_updates: stats.submitted_updates,
         },
     )
 }
@@ -1497,12 +1090,17 @@ async fn handle_ci_upload(mut req: Request, env: Env) -> Result<Response> {
         return to_worker_error(err);
     }
 
-    match check_and_mark_replay(&env, &claims.jti).await {
+    // Check replay protection
+    let kv = env.kv("CATALOG")?;
+    let jti_hash = hex::encode(Sha256::digest(claims.jti.as_bytes()));
+    match catalog::check_and_mark_replay(&kv, &jti_hash).await {
         Ok(true) => {
             return error_response(409, "replay_detected", "OIDC token jti already used");
         }
         Ok(false) => {}
-        Err(err) => return to_worker_error(err),
+        Err(e) => {
+            console_log!("[WARN] Replay check failed: {:?}", e);
+        }
     }
 
     let file_bytes = match form.get("file") {
@@ -1568,39 +1166,78 @@ async fn handle_ci_upload(mut req: Request, env: Env) -> Result<Response> {
 
     let mut persisted = false;
     let mut r2_key = None;
-    let mut wasm_file_id = None;
 
     if !dry_run {
-        let client = match connect_to_db(&env).await {
-            Ok(client) => client,
-            Err(e) => return Response::error(format!("Failed to connect to database: {}", e), 500),
-        };
-
         let storage_key = format!(
             "{}/{}/{}.wasm",
             claims.repository.replace('/', "__"),
             version.replace('/', "_"),
             wasm_sha256
         );
-        if let Err(err) = store_wasm_in_r2(&env, &storage_key, &file_bytes).await {
+
+        let metadata = R2WasmMetadata {
+            repository: claims.repository.clone(),
+            version: version.clone(),
+            sha256: wasm_sha256.clone(),
+            uploaded_at: now_iso_timestamp(),
+            functions: function_names.clone(),
+        };
+
+        if let Err(err) = store_wasm_in_r2(&env, &storage_key, &file_bytes, &metadata).await {
             return to_worker_error(err);
         }
         persisted = true;
-        r2_key = Some(storage_key);
+        r2_key = Some(storage_key.clone());
 
-        wasm_file_id = match insert_wasm_catalog(
-            &client,
-            &claims.repository,
-            &version,
-            &wasm_sha256,
-            r2_key.as_deref(),
-            &function_names,
-        )
-        .await
-        {
-            Ok((file_id, _)) => Some(file_id),
-            Err(err) => return to_worker_error(err),
-        };
+        // Update KV catalog
+        let kv = env.kv("CATALOG")?;
+
+        // Ensure repo is in the list
+        catalog::ensure_repo_in_list(&kv, &claims.repository).await?;
+
+        // Update repo metadata
+        let mut repo_meta = catalog::get_repo(&kv, &claims.repository)
+            .await?
+            .unwrap_or_else(|| RepoMetadata {
+                github_repo: claims.repository.clone(),
+                versions: Vec::new(),
+                latest_version: None,
+                created_at: now_iso_timestamp(),
+            });
+
+        if !repo_meta.versions.contains(&version) {
+            repo_meta.versions.push(version.clone());
+        }
+        repo_meta.latest_version = Some(version.clone());
+        catalog::put_repo(&kv, &repo_meta).await?;
+
+        // Update version metadata
+        let mut version_meta = catalog::get_version(&kv, &claims.repository, &version)
+            .await?
+            .unwrap_or_else(|| VersionMetadata {
+                version: version.clone(),
+                files: Vec::new(),
+                created_at: now_iso_timestamp(),
+            });
+
+        // Check if this file already exists in the version
+        if !version_meta.files.iter().any(|f| f.sha256 == wasm_sha256) {
+            version_meta.files.push(FileMetadata {
+                r2_key: storage_key.clone(),
+                sha256: wasm_sha256.clone(),
+                uploaded_at: now_iso_timestamp(),
+                functions: function_names.clone(),
+            });
+        }
+        catalog::put_version(&kv, &claims.repository, &version_meta).await?;
+
+        // Initialize HLL registers in D1
+        let db = env.d1("HLL_DB")?;
+        hll_store::ensure_schema(&db).await?;
+
+        for function_name in &function_names {
+            hll_store::init_function_registers(&db, &storage_key, function_name).await?;
+        }
     }
 
     let payload = CiUploadResponse {
@@ -1621,7 +1258,6 @@ async fn handle_ci_upload(mut req: Request, env: Env) -> Result<Response> {
         repository_version: version,
         function_count: function_names.len(),
         function_names,
-        wasm_file_id,
         r2_key,
     };
 
@@ -1655,12 +1291,6 @@ async fn fetch(req: Request, env: Env, _ctx: worker::Context) -> Result<Response
     let router = Router::new();
 
     router
-        .post_async("/api/uppercase", |mut req, _ctx| async move {
-            let body: UppercaseRequest = req.json().await?;
-            let result = body.text.to_uppercase();
-            let response = UppercaseResponse { result };
-            Response::from_json(&response)
-        })
         .get_async("/api/repositories", |_req, ctx| async move {
             match handle_list_repositories(ctx.env).await {
                 Ok(response) => Ok(response),
@@ -1724,19 +1354,19 @@ async fn fetch(req: Request, env: Env, _ctx: worker::Context) -> Result<Response
                 }
             },
         )
-        .get_async("/api/wasm-files/:id", |_req, ctx| async move {
-            let id = match ctx.param("id").and_then(|value| value.parse::<i64>().ok()) {
-                Some(value) => value,
-                None => return error_response(400, "invalid_id", "Invalid wasm file id"),
-            };
-            handle_get_wasm_file(ctx.env, id).await
+        .get_async("/api/wasm/*r2_key", |_req, ctx| async move {
+            let r2_key = ctx
+                .param("r2_key")
+                .map(|value| value.to_string())
+                .unwrap_or_default();
+            handle_get_wasm_file(ctx.env, r2_key).await
         })
-        .get_async("/api/wasm-files/:id/hll-state", |_req, ctx| async move {
-            let id = match ctx.param("id").and_then(|value| value.parse::<i64>().ok()) {
-                Some(value) => value,
-                None => return error_response(400, "invalid_id", "Invalid wasm file id"),
-            };
-            handle_get_wasm_file_hll_state(ctx.env, id).await
+        .get_async("/api/wasm-hll/*r2_key", |_req, ctx| async move {
+            let r2_key = ctx
+                .param("r2_key")
+                .map(|value| value.to_string())
+                .unwrap_or_default();
+            handle_get_wasm_file_hll_state(ctx.env, r2_key).await
         })
         .post_async("/api/test-results", |req, ctx| async move {
             match handle_submit_test_result(req, ctx.env).await {
