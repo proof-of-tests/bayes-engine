@@ -29,7 +29,6 @@ struct RepositorySummary {
     github_repo: String,
     latest_version: Option<String>,
     latest_estimated_tests: f64,
-    #[allow(dead_code)]
     total_estimated_tests: f64,
     version_count: usize,
     file_count: usize,
@@ -182,6 +181,7 @@ fn render_repo_card(repo: RepositorySummary) -> Element {
         article { class: "repo-card",
             h2 { class: "repo-name", "{repo.github_repo}" }
             p { class: "repo-main-metric", "Latest estimate: {format_estimate(repo.latest_estimated_tests)} tests" }
+            p { class: "repo-metric", "All versions: {format_estimate(repo.total_estimated_tests)}" }
             p { class: "repo-metric", "Versions: {repo.version_count} | Files: {repo.file_count} | Functions: {repo.function_count}" }
             if let Some(version) = repo.latest_version.clone() {
                 p { class: "repo-version", "Latest version: {version}" }
