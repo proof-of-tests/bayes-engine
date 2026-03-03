@@ -261,6 +261,14 @@ impl HyperLogLog {
         &self.hashes
     }
 
+    /// Get a mutable reference to the minimum hashes array.
+    ///
+    /// This allows direct manipulation of register values, useful when
+    /// reconstructing HLL state from storage.
+    pub fn hashes_mut(&mut self) -> &mut [u64] {
+        &mut self.hashes
+    }
+
     /// Get a reference to the seeds array.
     ///
     /// Each element is the seed that produced the minimum hash for that

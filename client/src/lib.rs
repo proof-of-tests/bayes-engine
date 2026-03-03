@@ -33,16 +33,16 @@ struct RepositorySummary {
     version_count: usize,
     file_count: usize,
     function_count: usize,
-    submitted_updates: i64,
 }
 
 #[derive(Clone, Deserialize)]
 struct RepositoryDetailResponse {
+    #[allow(dead_code)]
     repository: String,
+    #[allow(dead_code)]
     latest_version: Option<String>,
     total_estimated_tests: f64,
     latest_estimated_tests: f64,
-    submitted_updates: i64,
     versions: Vec<VersionSummary>,
 }
 
@@ -51,7 +51,6 @@ struct VersionSummary {
     version: String,
     is_latest: bool,
     estimated_tests: f64,
-    submitted_updates: i64,
     file_count: usize,
     function_count: usize,
     files: Vec<WasmFileSummary>,
@@ -59,7 +58,7 @@ struct VersionSummary {
 
 #[derive(Clone, Deserialize)]
 struct WasmFileSummary {
-    id: i64,
+    r2_key: String,
     sha256: String,
     uploaded_at: String,
     functions: Vec<FunctionSummary>,
@@ -67,11 +66,11 @@ struct WasmFileSummary {
 
 #[derive(Clone, Deserialize)]
 struct FunctionSummary {
-    id: i64,
-    wasm_file_id: i64,
+    #[allow(dead_code)]
+    r2_key: String,
     name: String,
+    #[allow(dead_code)]
     estimated_tests: f64,
-    submitted_updates: i64,
 }
 
 #[derive(Clone, Deserialize)]
@@ -86,16 +85,14 @@ struct ApiErrorPayload {
 
 #[derive(Serialize)]
 struct SubmitHashRequest {
-    function_id: i64,
-    wasm_file_id: Option<i64>,
-    function_name: Option<String>,
+    r2_key: String,
+    function_name: String,
     seed: String,
     hash: String,
 }
 
 struct ExecutableFunction {
-    function_id: i64,
-    wasm_file_id: i64,
+    r2_key: String,
     function_name: String,
     wasm_bytes: Vec<u8>,
 }
@@ -186,7 +183,6 @@ fn render_repo_card(repo: RepositorySummary) -> Element {
             p { class: "repo-main-metric", "Latest estimate: {format_estimate(repo.latest_estimated_tests)} tests" }
             p { class: "repo-metric", "All versions: {format_estimate(repo.total_estimated_tests)}" }
             p { class: "repo-metric", "Versions: {repo.version_count} | Files: {repo.file_count} | Functions: {repo.function_count}" }
-            p { class: "repo-metric", "Submitted improvements: {repo.submitted_updates}" }
             if let Some(version) = repo.latest_version.clone() {
                 p { class: "repo-version", "Latest version: {version}" }
             }
@@ -260,11 +256,10 @@ fn Repo(owner: String, repo: String) -> Element {
             if let Some(detail) = data() {
                 p { class: "detail-summary", "Total estimated tests: {format_estimate(detail.total_estimated_tests)}" }
                 p { class: "detail-summary", "Latest version estimate: {format_estimate(detail.latest_estimated_tests)}" }
-                p { class: "detail-summary", "Submitted improvements: {detail.submitted_updates}" }
 
                 RepoRunner {
-                    repository: detail.repository.clone(),
-                    latest_version: detail.latest_version.clone(),
+                    repository: repository.clone(),
+                    latest_version: detail.versions.iter().find(|v| v.is_latest).map(|v| v.version.clone()),
                 }
 
                 div { class: "versions-grid",
@@ -277,7 +272,6 @@ fn Repo(owner: String, repo: String) -> Element {
                                 }
                             }
                             p { "Estimated tests: {format_estimate(version.estimated_tests)}" }
-                            p { "Submitted improvements: {version.submitted_updates}" }
                             p { "Files: {version.file_count} | Functions: {version.function_count}" }
 
                             for file in version.files {
@@ -288,8 +282,6 @@ fn Repo(owner: String, repo: String) -> Element {
                                         for function in file.functions {
                                             li {
                                                 strong { "{function.name}" }
-                                                " · est {format_estimate(function.estimated_tests)}"
-                                                " · updates {function.submitted_updates}"
                                             }
                                         }
                                     }
@@ -338,7 +330,8 @@ fn RepoRunner(repository: String, latest_version: Option<String>) -> Element {
                     return;
                 }
 
-                let mut local_hll = HashMap::<i64, HyperLogLog>::new();
+                // Use r2_key as the key for local HLL tracking
+                let mut local_hll = HashMap::<String, HyperLogLog>::new();
                 let mut state = 0x1234_5678_abcd_ef01u64;
 
                 while is_running() {
@@ -362,23 +355,17 @@ fn RepoRunner(repository: String, latest_version: Option<String>) -> Element {
                             }
                         };
 
+                        // Use composite key of r2_key + function_name for HLL tracking
+                        let hll_key = format!("{}:{}", executable.r2_key, executable.function_name);
                         let hll = local_hll
-                            .entry(executable.function_id)
+                            .entry(hll_key)
                             .or_insert_with(|| HyperLogLog::new(DEFAULT_HLL_BITS));
                         if hll.add_hash(hash) {
                             improvements += 1;
-                            let function_id = executable.function_id;
-                            let wasm_file_id = executable.wasm_file_id;
+                            let r2_key = executable.r2_key.clone();
                             let function_name = executable.function_name.clone();
                             spawn(async move {
-                                let _ = submit_improvement(
-                                    function_id,
-                                    wasm_file_id,
-                                    function_name,
-                                    seed,
-                                    hash,
-                                )
-                                .await;
+                                let _ = submit_improvement(r2_key, function_name, seed, hash).await;
                             });
                         }
                     }
@@ -433,30 +420,30 @@ async fn load_latest_functions(repository: &str) -> Result<Vec<ExecutableFunctio
 
     let mut executables = Vec::new();
     for file in catalog.files {
-        let wasm_url = format!("/api/wasm-files/{}", file.id);
+        // Use the new API endpoint with r2_key
+        let wasm_url = format!("/api/wasm/{}", file.r2_key);
         let response = Request::get(&wasm_url)
             .send()
             .await
-            .map_err(|err| format!("Failed downloading wasm {}: {err}", file.id))?;
+            .map_err(|err| format!("Failed downloading wasm {}: {err}", file.r2_key))?;
         if !response.ok() {
             return Err(api_error_message(response, "Failed downloading wasm bytes").await);
         }
         let wasm_bytes = response
             .binary()
             .await
-            .map_err(|err| format!("Failed reading wasm bytes {}: {err}", file.id))?;
+            .map_err(|err| format!("Failed reading wasm bytes {}: {err}", file.r2_key))?;
 
         for function in file.functions {
             // Validate function at load time.
             execute_function_once(&wasm_bytes, &function.name, 0).map_err(|err| {
                 format!(
                     "Function {} in wasm file {} is not callable as u64->u64: {}",
-                    function.name, file.id, err
+                    function.name, file.r2_key, err
                 )
             })?;
             executables.push(ExecutableFunction {
-                function_id: function.id,
-                wasm_file_id: function.wasm_file_id,
+                r2_key: file.r2_key.clone(),
                 function_name: function.name,
                 wasm_bytes: wasm_bytes.clone(),
             });
@@ -483,16 +470,14 @@ fn execute_function_once(wasm_bytes: &[u8], function_name: &str, seed: u64) -> R
 }
 
 async fn submit_improvement(
-    function_id: i64,
-    wasm_file_id: i64,
+    r2_key: String,
     function_name: String,
     seed: u64,
     hash: u64,
 ) -> Result<(), String> {
     let payload = SubmitHashRequest {
-        function_id,
-        wasm_file_id: Some(wasm_file_id),
-        function_name: Some(function_name),
+        r2_key,
+        function_name,
         seed: seed.to_string(),
         hash: hash.to_string(),
     };
